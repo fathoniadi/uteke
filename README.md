@@ -410,11 +410,12 @@ yang udah hidup dan dipakai recall/search. Bonus: akurasi orphan detection
 ikut membaik karena memory dengan kontradiksi gak lagi dianggap orphan.
 
 **MCP sekarang bisa update memory.** Dua tool baru: `uteke_update_memory`
-(buat ganti konten, metadata, importance, pinned, atau type) dan
-`uteke_update_memory_tags` (buat replace seluruh tag set — termasuk clear
-dengan array kosong). Sebelumnya satu-satunya cara buat mengubah memory
-yalah re-remember, yang bisa bikin dedup-skip atau duplikat. Plus,
-tool list sekarang balikin full UUID, bukan 8 karakter doang.
+(buat ganti konten, metadata, importance, pinned, atau type — cukup kasih
+`id` dan field yang mau diubah, yang gak disebut gak disentuh) dan
+`uteke_update_memory_tags` (buat replace seluruh tag set — passing array
+kosong `[]` akan clear semua tag). Sebelumnya satu-satunya cara buat
+mengubah memory yalah re-remember, yang bisa bikin dedup-skip atau duplikat.
+Plus, tool list sekarang balikin full UUID, bukan 8 karakter doang.
 
 **CLI bisa auth ke server pakai token.** Tinggal set environment variable
 `UTEKE_AUTH_TOKEN`, dan semua command CLI (`uteke recall`, `uteke list`,
