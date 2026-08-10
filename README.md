@@ -422,10 +422,6 @@ Plus, tool list sekarang balikin full UUID, bukan 8 karakter doang.
 dst.) otomatis nyertakan `Authorization: Bearer <token>` ke server.
 Tanpa token ya tetep jalan seperti biasa — backward compatible.
 
-**Server diberi pagar auth.** Systemd unit sekarang jalan dengan
-`--auth-token`, jadi semua request HTTP wajib bawa token yang sama.
-Ini cuma perubahan konfigurasi, bukan kode.
-
 ### Komponen yang disentuh
 
 | Komponen | Yang berubah |
@@ -433,22 +429,6 @@ Ini cuma perubahan konfigurasi, bukan kode.
 | **Core** (`uteke-core`) | Fix dream contradict → `memory_edges` + unit test |
 | **MCP** (`uteke-mcp`) | `uteke_update_memory`, `uteke_update_memory_tags`, full UUID di list |
 | **CLI** (`uteke-cli`) | `UTEKE_AUTH_TOKEN` env var + unit test |
-| **Server** (`uteke-server`) | Konfigurasi systemd: `--auth-token` |
-
-### Cara deploy ulang
-
-```bash
-# CLI binary
-cargo build --release -p uteke-cli
-cp target/release/uteke ~/.local/bin/uteke
-
-# Kalau server config Systemd berubah
-sudo systemctl daemon-reload
-sudo systemctl restart uteke-serve
-
-# Biar CLI jalan tanpa prefix token
-echo 'export UTEKE_AUTH_TOKEN="token-kamu"' >> ~/.bashrc
-```
 
 ---
 
