@@ -396,44 +396,57 @@ Contributions welcome! Read [CONTRIBUTING.md](CONTRIBUTING.md) for the full guid
 
 ## 🦊 Thoni's Custom Changes (branch `feature/thoni-needs`)
 
-Perubahan personal Thoni di atas upstream `main` (@ `99e2ab9`).
+Ini adalah perubahan yang kubuat di atas upstream `main` (commit `99e2ab9`).
+Semua sudah jalan di production dan punya unit test.
 
-### Core (`uteke-core`)
+### Yang berubah dan kenapa
 
-- **Fix: `dream phase_contradict` nulis ke `memory_edges`** (sebelumnya salah nulis ke `graph_edges` → FK constraint failed). Edge `contradicts` sekarang tersimpan di sistem graph yang hidup, bukan entity graph yang mati (#317).
-- Unit test: `contradict_edges_written_to_memory_edges` — verifikasi 2 memory dengan tag sama + embedding berbeda → edge `contradicts` masuk ke `memory_edges`.
+**Dream sekarang gak error lagi pas deteksi kontradiksi.** Sebelumnya,
+`dream contradict` nulis edge ke tabel `graph_edges` yang FK-nya nunjuk ke
+tabel `graph_nodes` — dan tabel itu kosong. Akibatnya tiap ada kontradiksi,
+edge-nya gagal disimpan (FK constraint failed), cuma muncul sebagai WARN
+di log. Sekarang kontradiksi disimpan ke `memory_edges` — sistem graph
+yang udah hidup dan dipakai recall/search. Bonus: akurasi orphan detection
+ikut membaik karena memory dengan kontradiksi gak lagi dianggap orphan.
 
-### MCP (`uteke-mcp`)
+**MCP sekarang bisa update memory.** Dua tool baru: `uteke_update_memory`
+(buat ganti konten, metadata, importance, pinned, atau type) dan
+`uteke_update_memory_tags` (buat replace seluruh tag set — termasuk clear
+dengan array kosong). Sebelumnya satu-satunya cara buat mengubah memory
+yalah re-remember, yang bisa bikin dedup-skip atau duplikat. Plus,
+tool list sekarang balikin full UUID, bukan 8 karakter doang.
 
-- **Feat: `uteke_update_memory` tool** — update konten, metadata, importance, pinned, type dari memory via MCP tanpa re-remember (nggak dedup-skip / duplikat).
-- **Feat: `uteke_update_memory_tags` tool** — replace full tag set memory via MCP. Array kosong `[]` = clear semua tag.
-- **Fix: balikin full UUID** — sebelumnya tool list/list context pakai short ID (8 char), sekarang full UUID.
+**CLI bisa auth ke server pakai token.** Tinggal set environment variable
+`UTEKE_AUTH_TOKEN`, dan semua command CLI (`uteke recall`, `uteke list`,
+dst.) otomatis nyertakan `Authorization: Bearer <token>` ke server.
+Tanpa token ya tetep jalan seperti biasa — backward compatible.
 
-### Server (`uteke-server`)
+**Server diberi pagar auth.** Systemd unit sekarang jalan dengan
+`--auth-token`, jadi semua request HTTP wajib bawa token yang sama.
+Ini cuma perubahan konfigurasi, bukan kode.
 
-Tidak ada perubahan kode. Konfigurasi systemd ditambahkan:
-- `--auth-token <token>` di `ExecStart` untuk mengaktifkan authentication
-- `Environment=UTEKE_AUTH_TOKEN=...` untuk CLI (lihat bawah)
+### Komponen yang disentuh
 
-### CLI (`uteke-cli`)
+| Komponen | Yang berubah |
+|---|---|
+| **Core** (`uteke-core`) | Fix dream contradict → `memory_edges` + unit test |
+| **MCP** (`uteke-mcp`) | `uteke_update_memory`, `uteke_update_memory_tags`, full UUID di list |
+| **CLI** (`uteke-cli`) | `UTEKE_AUTH_TOKEN` env var + unit test |
+| **Server** (`uteke-server`) | Konfigurasi systemd: `--auth-token` |
 
-- **Feat: `UTEKE_AUTH_TOKEN` env var** — CLI membaca token dari environment variable dan otomatis attach `Authorization: Bearer <token>` ke semua request HTTP ke server. Tanpa token = backward compatible (request polos).
-- Refactor: extract `resolve_auth_token()` pure function, `build_client()` pakai helper tersebut.
-- Unit test: `resolve_auth_token_from_env` — verifikasi env kosong → `None`, env di-set → `Bearer <token>`, env diganti → nilai baru.
-
-### Deployment
+### Cara deploy ulang
 
 ```bash
 # CLI binary
 cargo build --release -p uteke-cli
 cp target/release/uteke ~/.local/bin/uteke
 
-# Server config (systemd)
-sudo systemctl edit …  # tambah --auth-token
-sudo systemctl daemon-reload && sudo systemctl restart uteke-serve
+# Kalau server config Systemd berubah
+sudo systemctl daemon-reload
+sudo systemctl restart uteke-serve
 
-# Shell
-echo 'export UTEKE_AUTH_TOKEN="..."'  >> ~/.bashrc
+# Biar CLI jalan tanpa prefix token
+echo 'export UTEKE_AUTH_TOKEN="token-kamu"' >> ~/.bashrc
 ```
 
 ---
