@@ -441,9 +441,8 @@ impl crate::Uteke {
                     (&m2.id, &m1.id)
                 };
 
-                // Create "contradicts" graph edge
-                let gs = crate::GraphStore::new(&self.store.conn);
-                match gs.add_edge(older, newer, "contradicts", cosine as f64) {
+                // Create "contradicts" memory edge
+                match self.store.add_memory_edge(older, newer, "contradicts") {
                     Ok(()) => {
                         edges_created += 1;
                         tracing::info!(
