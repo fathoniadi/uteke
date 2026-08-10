@@ -37,7 +37,19 @@ fn parse_json_value(resp: reqwest::blocking::Response) -> Result<serde_json::Val
 
 /// Route CLI commands through the HTTP server for <50ms latency.
 pub(crate) fn run_via_server(cli: &Cli, server_url: &str) -> Result<(), String> {
-    let client = reqwest::blocking::Client::new();
+    let mut client_builder = reqwest::blocking::Client::builder();
+    if let Ok(token) = std::env::var("UTEKE_AUTH_TOKEN") {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+                .map_err(|e| format!("Invalid UTEKE_AUTH_TOKEN: {e}"))?,
+        );
+        client_builder = client_builder.default_headers(headers);
+    }
+    let client = client_builder
+        .build()
+        .map_err(|e| format!("Client error: {e}"))?;
     let ns = cli.namespace.as_deref().unwrap_or("default");
 
     match &cli.command {
