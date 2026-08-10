@@ -405,7 +405,9 @@ Perubahan personal Thoni di atas upstream `main` (@ `99e2ab9`).
 
 ### MCP (`uteke-mcp`)
 
-Tidak ada perubahan.
+- **Feat: `uteke_update_memory` tool** — update konten, metadata, importance, pinned, type dari memory via MCP tanpa re-remember (nggak dedup-skip / duplikat).
+- **Feat: `uteke_update_memory_tags` tool** — replace full tag set memory via MCP. Array kosong `[]` = clear semua tag.
+- **Fix: balikin full UUID** — sebelumnya tool list/list context pakai short ID (8 char), sekarang full UUID.
 
 ### Server (`uteke-server`)
 
