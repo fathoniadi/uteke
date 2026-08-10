@@ -394,6 +394,48 @@ Contributions welcome! Read [CONTRIBUTING.md](CONTRIBUTING.md) for the full guid
 
 ---
 
+## 🦊 Thoni's Custom Changes (branch `feature/thoni-needs`)
+
+Perubahan personal Thoni di atas upstream `main` (@ `99e2ab9`).
+
+### Core (`uteke-core`)
+
+- **Fix: `dream phase_contradict` nulis ke `memory_edges`** (sebelumnya salah nulis ke `graph_edges` → FK constraint failed). Edge `contradicts` sekarang tersimpan di sistem graph yang hidup, bukan entity graph yang mati (#317).
+- Unit test: `contradict_edges_written_to_memory_edges` — verifikasi 2 memory dengan tag sama + embedding berbeda → edge `contradicts` masuk ke `memory_edges`.
+
+### MCP (`uteke-mcp`)
+
+Tidak ada perubahan.
+
+### Server (`uteke-server`)
+
+Tidak ada perubahan kode. Konfigurasi systemd ditambahkan:
+- `--auth-token <token>` di `ExecStart` untuk mengaktifkan authentication
+- `Environment=UTEKE_AUTH_TOKEN=...` untuk CLI (lihat bawah)
+
+### CLI (`uteke-cli`)
+
+- **Feat: `UTEKE_AUTH_TOKEN` env var** — CLI membaca token dari environment variable dan otomatis attach `Authorization: Bearer <token>` ke semua request HTTP ke server. Tanpa token = backward compatible (request polos).
+- Refactor: extract `resolve_auth_token()` pure function, `build_client()` pakai helper tersebut.
+- Unit test: `resolve_auth_token_from_env` — verifikasi env kosong → `None`, env di-set → `Bearer <token>`, env diganti → nilai baru.
+
+### Deployment
+
+```bash
+# CLI binary
+cargo build --release -p uteke-cli
+cp target/release/uteke ~/.local/bin/uteke
+
+# Server config (systemd)
+sudo systemctl edit …  # tambah --auth-token
+sudo systemctl daemon-reload && sudo systemctl restart uteke-serve
+
+# Shell
+echo 'export UTEKE_AUTH_TOKEN="..."'  >> ~/.bashrc
+```
+
+---
+
 ## 📄 License
 
 [Apache License 2.0](LICENSE). Use it, fork it, ship it.
