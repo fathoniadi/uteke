@@ -307,8 +307,28 @@ fn dashboard_spa() -> String {
   .chips input { border: none; outline: none; flex: 1; min-width: 120px; padding: 0.2rem; font-size: 0.85rem; background: transparent; }
   .toast-container { z-index: 1100; }
   .cursor-pointer { cursor: pointer; }
-  .nav-tab { color: #adb5bd; font-size: 0.85rem; }
-  .nav-tab.active { background: rgba(255,255,255,0.15); color: #fff; }
+  /* ── Sidebar layout (Bootstrap 5 pattern) ──────────────────────────── */
+  .sidebar { position: fixed; top: 0; left: 0; bottom: 0; width: 240px; background: #212529; color: #adb5bd; z-index: 1000; transition: transform 0.25s ease-in-out; overflow-y: auto; padding-top: 56px; }
+  .sidebar .nav-link { color: #adb5bd; padding: 0.6rem 1rem; border-radius: 0.25rem; margin: 0.15rem 0.5rem; font-size: 0.9rem; display: flex; align-items: center; gap: 0.5rem; }
+  .sidebar .nav-link:hover { color: #fff; background: rgba(255,255,255,0.1); }
+  .sidebar .nav-link.active { color: #fff; background: #0d6efd; }
+  .sidebar .nav-link i { font-size: 1rem; }
+  .sidebar .sidebar-header { padding: 1rem 1rem 0.5rem; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: #6c757d; }
+  .sidebar .sidebar-section { padding: 0.5rem 0; border-top: 1px solid #343a40; margin-top: 0.5rem; }
+  .sidebar .sidebar-user { padding: 0.75rem 1rem; font-size: 0.8rem; color: #6c757d; border-top: 1px solid #343a40; margin-top: auto; position: absolute; bottom: 0; left: 0; right: 0; }
+  body.sidebar-hidden .sidebar { transform: translateX(-240px); }
+  .main-wrapper { margin-left: 240px; transition: margin-left 0.25s ease-in-out; min-height: 100vh; }
+  body.sidebar-hidden .main-wrapper { margin-left: 0; }
+  .topbar { position: sticky; top: 0; z-index: 900; height: 48px; background: #fff; border-bottom: 1px solid #dee2e6; display: flex; align-items: center; padding: 0 1rem; gap: 0.75rem; }
+  .topbar .btn-sidebar { border: none; padding: 0.25rem 0.5rem; font-size: 1.1rem; line-height: 1; }
+  @media (max-width: 768px) {
+    .sidebar { width: 200px; }
+    body.sidebar-hidden .sidebar { transform: translateX(-200px); }
+    .main-wrapper { margin-left: 200px; }
+    body.sidebar-hidden .main-wrapper { margin-left: 0; }
+    .sidebar-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 999; }
+    body:not(.sidebar-hidden) .sidebar-backdrop { display: block; }
+  }
   .doc-markdown { line-height: 1.6; }
   .doc-markdown h1 { font-size: 1.5rem; margin-top: 1rem; }
   .doc-markdown h2 { font-size: 1.3rem; margin-top: 0.8rem; }
@@ -327,17 +347,26 @@ fn dashboard_spa() -> String {
 </style>
 </head>
 <body>
-<nav class="navbar navbar-dark bg-dark px-3 py-2">
-  <span class="navbar-brand mb-0 h1">uteke Dashboard</span>
-  <div class="d-flex align-items-center gap-3 ms-auto">
-    <ul class="nav nav-pills nav-fill" id="nav-tabs">
-      <li class="nav-item"><a class="nav-link nav-tab py-1 px-3" href="#/memories" data-page="memories">Memories</a></li>
-      <li class="nav-item"><a class="nav-link nav-tab py-1 px-3" href="#/documents" data-page="documents">Documents</a></li>
-    </ul>
-    <span class="text-secondary small" id="user-label">—</span>
-    <button class="btn btn-sm btn-outline-light" onclick="logout()"><i class="bi bi-box-arrow-right"></i> Logout</button>
+<!-- Sidebar -->
+<nav class="sidebar" id="sidebar">
+  <div class="sidebar-header">Navigation</div>
+  <ul class="nav flex-column">
+    <li class="nav-item"><a class="nav-link" href="#/memories" data-page="memories"><i class="bi bi-collection"></i> Memories</a></li>
+    <li class="nav-item"><a class="nav-link" href="#/documents" data-page="documents"><i class="bi bi-file-earmark-text"></i> Documents</a></li>
+  </ul>
+  <div class="sidebar-user">
+    <div id="user-label" class="text-light small mb-1">—</div>
+    <button class="btn btn-sm btn-outline-light w-100" onclick="logout()"><i class="bi bi-box-arrow-right"></i> Logout</button>
   </div>
 </nav>
+<div class="sidebar-backdrop" onclick="toggleSidebar()"></div>
+
+<!-- Main content wrapper -->
+<div class="main-wrapper">
+  <div class="topbar">
+    <button class="btn btn-light btn-sidebar" onclick="toggleSidebar()" title="Toggle sidebar"><i class="bi bi-list"></i></button>
+    <span class="navbar-brand mb-0 h5">uteke Dashboard</span>
+  </div>
 
 <div id="page-memories">
 <main class="container-fluid py-3" style="max-width:1180px;">
@@ -994,7 +1023,20 @@ function initDocModals(){
 function showPage(name){
   document.getElementById("page-memories").style.display = name === "memories" ? "" : "none";
   document.getElementById("page-docs").style.display = name === "documents" ? "" : "none";
-  document.querySelectorAll(".nav-tab").forEach(t => t.classList.toggle("active", t.dataset.page === name));
+  document.querySelectorAll(".sidebar .nav-link").forEach(t => t.classList.toggle("active", t.dataset.page === name));
+}
+function toggleSidebar(){
+  document.body.classList.toggle("sidebar-hidden");
+  // Persist preference
+  try { localStorage.setItem("uteke_sidebar_hidden", document.body.classList.contains("sidebar-hidden") ? "1" : "0"); } catch(_){}
+}
+// Restore sidebar state on load
+try { if(localStorage.getItem("uteke_sidebar_hidden") === "1") document.body.classList.add("sidebar-hidden"); } catch(_){}
+// Auto-hide sidebar on mobile after navigation
+function autoHideSidebarMobile(){
+  if(window.innerWidth <= 768 && !document.body.classList.contains("sidebar-hidden")){
+    document.body.classList.add("sidebar-hidden");
+  }
 }
 function routeHash(){
   const h = window.location.hash.slice(1); // remove #
@@ -1008,6 +1050,7 @@ function routeHash(){
   } else {
     showPage("memories");
   }
+  autoHideSidebarMobile();
 }
 window.addEventListener("hashchange", routeHash);
 
@@ -1252,6 +1295,7 @@ function initDocs(){
 initDocs();
 routeHash();
 </script>
+</div><!-- /main-wrapper -->
 </body>
 </html>"##.to_string()
 }
