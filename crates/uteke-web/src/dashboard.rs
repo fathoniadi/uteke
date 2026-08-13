@@ -167,14 +167,16 @@ pub async fn dashboard_callback(
         return (StatusCode::INTERNAL_SERVER_ERROR, "session error").into_response();
     }
     // Set signed cookie + CSRF cookie, redirect to /dashboard.
+    // SameSite=Lax (not Strict) — allows cookie on top-level redirect from
+    // OAuth2 callback. Lax still blocks cross-site POST (CSRF protection).
     let signed = session::sign_session_cookie(&session_id, &state.config.jwt_secret);
     let secure = state.config.issuer.starts_with("https://");
     let secure_flag = if secure { "; Secure" } else { "" };
     let cookie_val = format!(
-        "{SESSION_COOKIE}={signed}; Path=/; HttpOnly; SameSite=Strict{secure_flag}; Max-Age={ttl}"
+        "{SESSION_COOKIE}={signed}; Path=/; HttpOnly; SameSite=Lax{secure_flag}; Max-Age={ttl}"
     );
     let csrf_cookie =
-        format!("{CSRF_COOKIE}={csrf_token}; Path=/; SameSite=Strict{secure_flag}; Max-Age={ttl}");
+        format!("{CSRF_COOKIE}={csrf_token}; Path=/; SameSite=Lax{secure_flag}; Max-Age={ttl}");
     let mut headers = HeaderMap::new();
     headers.append(
         "set-cookie",
