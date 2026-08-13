@@ -83,6 +83,28 @@ session_ttl_hours = 24
 # cert = "/path/to/cert.pem"
 # key = "/path/to/key.pem"
 
+[web.cors]
+# Enable CORS untuk browser-facing endpoints (dashboard API, OAuth2, proxy).
+# Default: false (backward compatible).
+enabled = false
+
+# Origins yang diizinkan. ["*"] = any origin.
+# Jika pakai credentials=true, HARUS list specific origins (tidak boleh "*").
+# allow_origins = ["https://app.example.com", "http://localhost:3000"]
+allow_origins = ["*"]
+
+# HTTP methods yang diizinkan.
+allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+
+# Request headers yang diizinkan.
+allow_headers = ["Authorization", "Content-Type", "X-CSRF-Token"]
+
+# Allow cookies/credentials. Harus false jika allow_origins = ["*"].
+allow_credentials = false
+
+# Preflight cache max-age dalam detik.
+max_age_secs = 3600
+
 # ─── Section embedding (dipakai uteke-core) ──────────────────────────────────
 
 [embedding]

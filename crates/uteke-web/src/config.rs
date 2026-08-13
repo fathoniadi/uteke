@@ -72,6 +72,8 @@ pub struct WebConfig {
     pub dashboard: DashboardConfig,
     /// TLS sub-section (optional standalone TLS).
     pub tls: TlsConfig,
+    /// CORS sub-section (optional).
+    pub cors: CorsConfig,
 }
 
 /// A single extra header to inject into upstream requests.
@@ -99,6 +101,7 @@ impl Default for WebConfig {
             log_level: "info".to_string(),
             dashboard: DashboardConfig::default(),
             tls: TlsConfig::default(),
+            cors: CorsConfig::default(),
         }
     }
 }
@@ -137,6 +140,62 @@ impl TlsConfig {
     #[allow(dead_code)]
     pub fn is_configured(&self) -> bool {
         !self.cert.is_empty() && !self.key.is_empty()
+    }
+}
+
+/// `[web.cors]` sub-section — CORS policy for browser-facing endpoints.
+///
+/// TOML format:
+/// ```toml
+/// [web.cors]
+/// enabled = true
+/// allow_origins = ["https://app.example.com"]
+/// allow_methods = ["GET", "POST", "PUT", "DELETE"]
+/// allow_headers = ["Authorization", "Content-Type"]
+/// allow_credentials = true
+/// max_age_secs = 3600
+/// ```
+#[derive(serde::Deserialize, Clone)]
+#[serde(default)]
+pub struct CorsConfig {
+    /// Enable CORS. Default: false (backward compatible).
+    pub enabled: bool,
+    /// Allowed origins. `["*"]` = any origin (credentials must be false
+    /// when using wildcard). Default: `["*"]`.
+    pub allow_origins: Vec<String>,
+    /// Allowed methods. Default: GET, POST, PUT, PATCH, DELETE, OPTIONS.
+    pub allow_methods: Vec<String>,
+    /// Allowed request headers. Default: Authorization, Content-Type,
+    /// X-CSRF-Token.
+    pub allow_headers: Vec<String>,
+    /// Allow cookies/credentials. Default: false.
+    /// Must be false when allow_origins contains "*".
+    pub allow_credentials: bool,
+    /// Preflight cache max-age in seconds. Default: 3600.
+    pub max_age_secs: u64,
+}
+
+impl Default for CorsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allow_origins: vec!["*".to_string()],
+            allow_methods: vec![
+                "GET".to_string(),
+                "POST".to_string(),
+                "PUT".to_string(),
+                "PATCH".to_string(),
+                "DELETE".to_string(),
+                "OPTIONS".to_string(),
+            ],
+            allow_headers: vec![
+                "Authorization".to_string(),
+                "Content-Type".to_string(),
+                "X-CSRF-Token".to_string(),
+            ],
+            allow_credentials: false,
+            max_age_secs: 3600,
+        }
     }
 }
 
@@ -249,6 +308,26 @@ impl WebConfig {
             }
             if tls.contains_key("key") {
                 self.tls.key = overlay.tls.key.clone();
+            }
+        }
+        if let Some(cors) = web_table.get("cors").and_then(|v| v.as_table()) {
+            if cors.contains_key("enabled") {
+                self.cors.enabled = overlay.cors.enabled;
+            }
+            if cors.contains_key("allow_origins") {
+                self.cors.allow_origins = overlay.cors.allow_origins.clone();
+            }
+            if cors.contains_key("allow_methods") {
+                self.cors.allow_methods = overlay.cors.allow_methods.clone();
+            }
+            if cors.contains_key("allow_headers") {
+                self.cors.allow_headers = overlay.cors.allow_headers.clone();
+            }
+            if cors.contains_key("allow_credentials") {
+                self.cors.allow_credentials = overlay.cors.allow_credentials;
+            }
+            if cors.contains_key("max_age_secs") {
+                self.cors.max_age_secs = overlay.cors.max_age_secs;
             }
         }
         self
