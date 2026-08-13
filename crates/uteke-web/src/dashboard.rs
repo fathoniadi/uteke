@@ -106,7 +106,26 @@ pub async fn dashboard_callback(
 ) -> Response {
     if let Some(err) = params.error {
         let body = format!(
-            r#"<html><body><h1>Login failed</h1><p>{}</p></body></html>"#,
+            r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>uteke — Login Failed</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+</head>
+<body class="d-flex align-items-center justify-content-center min-vh-100 bg-light">
+<div class="card shadow-sm" style="max-width:420px;">
+  <div class="card-body p-4 text-center">
+    <i class="bi bi-x-octagon fs-1 text-danger"></i>
+    <h1 class="h4 mt-2">Login failed</h1>
+    <p class="text-muted">{}</p>
+    <a href="/dashboard" class="btn btn-outline-primary btn-sm"><i class="bi bi-arrow-left"></i> Back</a>
+  </div>
+</div>
+</body>
+</html>"#,
             html_escape(&err)
         );
         return (StatusCode::BAD_REQUEST, Html(body)).into_response();
@@ -239,7 +258,7 @@ fn dashboard_spa() -> String {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>uteke — Dashboard</title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QVTKMEXk5cY3aF5l5l5l5l5l5l5l5l5l5l5l5l5l5l5=" crossorigin="anonymous">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
 <style>
   body { background: #f1f5f9; }
@@ -430,7 +449,7 @@ fn dashboard_spa() -> String {
   <div id="toast" class="toast text-bg-dark" role="alert"><div class="d-flex"><div class="toast-body" id="toast-body"></div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div></div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-7PYk5l5l5l5l5l5l5l5l5l5l5l5l5l5l5l5l5l5=" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 const TYPES = ["fact","procedure","preference","decision","context","note","insight","reference","event"];
 const LIMIT = 20;

@@ -929,7 +929,10 @@ fn login_page_inner(
     let error_html = if error.is_empty() {
         String::new()
     } else {
-        format!(r#"<p class="error">{}</p>"#, html_escape(error))
+        format!(
+            r#"<div class="alert alert-danger" role="alert"><i class="bi bi-exclamation-triangle"></i> {}</div>"#,
+            html_escape(error)
+        )
     };
     format!(
         r#"<!DOCTYPE html>
@@ -937,23 +940,23 @@ fn login_page_inner(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>uteke-web — Login</title>
+<title>uteke — Login</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
 <style>
-  body {{ font-family: system-ui, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }}
-  .card {{ background: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); width: 100%; max-width: 360px; }}
-  h1 {{ font-size: 1.25rem; margin: 0 0 1.5rem; }}
-  label {{ display: block; margin-bottom: 0.25rem; font-size: 0.875rem; color: #555; }}
-  input {{ width: 100%; padding: 0.5rem; margin-bottom: 1rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }}
-  button {{ width: 100%; padding: 0.6rem; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 1rem; }}
-  button:hover {{ background: #1d4ed8; }}
-  .error {{ color: #dc2626; margin-bottom: 1rem; font-size: 0.875rem; }}
+  body {{ background: #f1f5f9; }}
+  .login-card {{ max-width: 380px; }}
 </style>
 </head>
-<body>
-<div class="card">
-  <h1>Sign in to uteke</h1>
-  {error_html}
-  <form method="POST" action="/oauth2/login">
+<body class="d-flex align-items-center justify-content-center min-vh-100">
+<div class="card login-card shadow-sm">
+  <div class="card-body p-4">
+    <div class="text-center mb-3">
+      <i class="bi bi-shield-lock fs-1 text-primary"></i>
+      <h1 class="h4 mb-0 mt-2">Sign in to uteke</h1>
+    </div>
+    {error_html}
+    <form method="POST" action="/oauth2/login">
     <input type="hidden" name="client_id" value="{client_id}">
     <input type="hidden" name="redirect_uri" value="{redirect_uri}">
     <input type="hidden" name="scope" value="{scope}">
@@ -961,13 +964,25 @@ fn login_page_inner(
     <input type="hidden" name="code_challenge" value="{code_challenge}">
     <input type="hidden" name="code_challenge_method" value="{code_challenge_method}">
     <input type="hidden" name="nonce" value="{nonce}">
-    <label for="username">Username</label>
-    <input id="username" name="username" type="text" required autofocus>
-    <label for="password">Password</label>
-    <input id="password" name="password" type="password" required>
-    <button type="submit">Sign in</button>
+    <div class="mb-3">
+      <label for="username" class="form-label">Username</label>
+      <div class="input-group">
+        <span class="input-group-text"><i class="bi bi-person"></i></span>
+        <input id="username" name="username" type="text" class="form-control" required autofocus>
+      </div>
+    </div>
+    <div class="mb-3">
+      <label for="password" class="form-label">Password</label>
+      <div class="input-group">
+        <span class="input-group-text"><i class="bi bi-key"></i></span>
+        <input id="password" name="password" type="password" class="form-control" required>
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary w-100"><i class="bi bi-box-arrow-in-right"></i> Sign in</button>
   </form>
+  </div>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>"#,
         client_id = html_escape(client_id),
@@ -982,8 +997,25 @@ fn login_page_inner(
 
 fn error_page(msg: &str) -> Response {
     let body = format!(
-        r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>Error</title></head>
-<body><h1>Authentication Error</h1><p>{}</p></body></html>"#,
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>uteke — Error</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+</head>
+<body class="d-flex align-items-center justify-content-center min-vh-100 bg-light">
+<div class="card shadow-sm" style="max-width:420px;">
+  <div class="card-body p-4 text-center">
+    <i class="bi bi-exclamation-octagon fs-1 text-danger"></i>
+    <h1 class="h4 mt-2">Authentication Error</h1>
+    <p class="text-muted">{}</p>
+  </div>
+</div>
+</body>
+</html>"#,
         html_escape(msg)
     );
     (StatusCode::BAD_REQUEST, Html(body)).into_response()
