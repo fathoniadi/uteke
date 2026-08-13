@@ -866,15 +866,7 @@ fn exec_update_memory_tags(uteke: &Uteke, args: &Value) -> Result<ToolResult, St
 
     // Replace the full tag set on the existing memory (no content change).
     let updated = uteke
-        .update_memory(
-            id,
-            None,
-            Some(&tags),
-            None,
-            None,
-            None,
-            None,
-        )
+        .update_memory(id, None, Some(&tags), None, None, None, None)
         .map_err(|e| format!("Failed: {e}"))?;
 
     if !updated {
@@ -1080,8 +1072,8 @@ fn exec_stats(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
         content: vec![McpContent::Text {
             r#type: "text".to_string(),
             text: format!(
-                "Total: {} | Tags: {} | DB: {} bytes",
-                stats.total_memories, stats.unique_tags, stats.db_size_bytes
+                "Total: {} | Tags: {} | Documents: {} | DB: {} bytes",
+                stats.total_memories, stats.unique_tags, stats.total_documents, stats.db_size_bytes
             ),
         }],
         is_error: false,

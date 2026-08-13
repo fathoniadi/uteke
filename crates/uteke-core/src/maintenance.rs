@@ -261,6 +261,10 @@ impl crate::Uteke {
 
         let (cache_hits, cache_misses) = self.recall_cache.metrics();
 
+        // Document count is global (not per-namespace) — documents don't have
+        // a namespace field in the same way memories do.
+        let total_documents = self.store.count_documents().unwrap_or(0);
+
         Ok(StoreStats {
             total_memories,
             unique_tags,
@@ -270,6 +274,7 @@ impl crate::Uteke {
             cold,
             cache_hits,
             cache_misses,
+            total_documents,
         })
     }
 

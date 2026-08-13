@@ -2429,6 +2429,7 @@ mod tests {
             cold: 17,
             cache_hits: 100,
             cache_misses: 25,
+            total_documents: 3,
         };
 
         let json = serde_json::to_string(&stats).unwrap();

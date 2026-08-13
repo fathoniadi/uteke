@@ -826,9 +826,7 @@ mod tests {
         store.insert(&m1).unwrap();
         store.insert(&m2).unwrap();
 
-        let report = uteke
-            .dream(None, false, &[DreamPhase::Contradict])
-            .unwrap();
+        let report = uteke.dream(None, false, &[DreamPhase::Contradict]).unwrap();
 
         assert_eq!(report.phases.len(), 1);
         assert_eq!(report.phases[0].phase, "contradict");

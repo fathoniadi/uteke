@@ -712,7 +712,7 @@ async function loadStats(){
     const s = await apiGet("/dashboard/api/stats"+(S.ns?("?namespace="+encodeURIComponent(S.ns)):""));
     const cards = [
       ["Memories", s.total_memories, "primary"], ["Tags", s.unique_tags, "info"],
-      ["Hot", s.hot, "success"], ["Warm", s.warm, "warning"], ["Cold", s.cold, "secondary"],
+      ["Docs", s.total_documents, "dark"], ["Hot", s.hot, "success"], ["Warm", s.warm, "warning"], ["Cold", s.cold, "secondary"],
     ];
     $("stats").innerHTML = cards.map(([l,n,c])=>`
       <div class="col-6 col-md">

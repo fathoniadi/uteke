@@ -88,7 +88,7 @@ async fn spawn_typed_upstream() -> std::net::SocketAddr {
     async fn stats(Query(_q): Query<HashMap<String, String>>) -> impl IntoResponse {
         (
             StatusCode::OK,
-            r#"{"total_memories":42,"unique_tags":5,"db_size_bytes":1024,"hot":3,"warm":7,"cold":32,"cache_hits":10,"cache_misses":20}"#,
+            r#"{"total_memories":42,"unique_tags":5,"db_size_bytes":1024,"hot":3,"warm":7,"cold":32,"cache_hits":10,"cache_misses":20,"total_documents":3}"#,
         )
     }
 
@@ -475,6 +475,7 @@ async fn stats_endpoint_returns_store_stats() {
     let json = read_json(resp).await;
     assert_eq!(json["total_memories"], 42);
     assert_eq!(json["unique_tags"], 5);
+    assert_eq!(json["total_documents"], 3);
 }
 
 #[tokio::test]
