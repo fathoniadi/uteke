@@ -82,6 +82,16 @@ pub struct RegisterRequest {
     pub client_name: Option<String>,
     pub scope: Option<String>,
     pub grant_types: Option<Vec<String>>,
+    pub response_types: Option<Vec<String>>,
+    pub token_endpoint_auth_method: Option<String>,
+    pub contacts: Option<Vec<String>>,
+    pub logo_uri: Option<String>,
+    pub client_uri: Option<String>,
+    pub policy_uri: Option<String>,
+    pub tos_uri: Option<String>,
+    pub jwks_uri: Option<String>,
+    pub software_id: Option<String>,
+    pub software_version: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -523,9 +533,11 @@ pub async fn register(
     }
     let client_id = uuid::Uuid::new_v4().to_string();
     let client_secret = crate::auth_store::random_token(48);
-    let scopes = body
+    let scope_str = body
         .scope
-        .unwrap_or_else(|| "read write".to_string())
+        .clone()
+        .unwrap_or_else(|| "read write".to_string());
+    let scopes = scope_str
         .split_whitespace()
         .map(|s| s.to_string())
         .collect();
@@ -559,9 +571,12 @@ pub async fn register(
         "client_id": client.client_id,
         "client_secret": client_secret,
         "client_id_issued_at": client.created_at,
+        "client_secret_expires_at": 0,
         "redirect_uris": client.redirect_uris,
         "grant_types": client.grants,
+        "response_types": ["code"],
         "token_endpoint_auth_method": "client_secret_post",
+        "scope": scope_str,
     }))
     .into_response()
 }
