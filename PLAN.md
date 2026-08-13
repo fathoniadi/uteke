@@ -198,6 +198,10 @@ Lihat `examples/uteke-web.toml` untuk contoh config lengkap dengan semua section
 - **M5** — middleware proxy (JWT validation → 401) + route priority
 - **M6** — reverse proxy + inject token statis + CORS passthrough + upstream error handling (502/504)
 - **M7** — dashboard (SPA + callback + API + session cookie + session rotation + server-side session store)
+  - **M7.1–M7.6** ✅ (2026-08-13) — Upgrade dashboard dari minimal (recall+remember) → full memory management UI. Detail di `PLAN-WEB.md`.
+    - Typed API layer (`dashboard_api.rs`): 9 handler (`/dashboard/api/memories`, `/memories/{id}`, `/tags`, `/namespaces`, `/stats`, `/profile`), `UtekeClient` wrapper, `memory_type` validated against core taxonomy. Generic passthrough dihapus.
+    - SPA rewrite: Bootstrap 5 (CDN) + vanilla.js + Bootstrap Icons. Browse table 20/page, 3 mode search (browse/semantic/fts) + debounce 300ms, filter ns/tag (count), sort client-side, detail/create/edit/forget modal, chip tag editor, importance slider, pin toggle, stats cards, user label, type badges, responsive. Trailing-slash `/dashboard/` redirect fix.
+    - Test: 5 unit + 16 integration (+1 trailing-slash regression test). 142 test total lulus, clippy clean, fmt clean.
 - **M8** — CLI credential + user (add/delete/list/change-password/unlock)
 - **M9** — logging (tracing structured) + metrics (`/metrics` Prometheus) + graceful shutdown + upstream health check (`/healthz` cek koneksi uteke-server)
 
@@ -222,3 +226,90 @@ M1 → M2 → M3 → M4a → M4b
 ```
 
 M5+M6 dan M7 bisa dikerjakan paralel setelah M4b selesai. M9 (logging) bisa mulai dari M5.
+
+---
+
+## 10. Post-M9 Fixes & Enhancements
+
+> Dilakukan setelah semua milestone M1–M9 selesai dan test coverage >80% tercapai.
+> Berdasarkan security audit, performance review, dan production testing dengan Claude.ai.
+
+### 10.1 Security Fixes
+
+| ID | Severity | Issue | Fix | File |
+|----|----------|-------|-----|------|
+| S1 | **High** | JWT `iss` tidak divalidasi → cross-client token replay | `verify_access_token` sekarang require `expected_iss` parameter, validate via `validation.set_issuer()` | `jwt.rs`, `proxy.rs`, `oauth.rs` |
+| S2 | **Medium** | `/oauth2/revoke` & `/oauth2/introspect` tanpa client auth | Tambah `resolve_client_from_revoke()` — Basic auth atau body `client_id`+`client_secret`. Tanpa auth → 401 | `oauth.rs` |
+| S3 | **Medium** | `X-Forwarded-For` dipercaya blindly → rate limit bypass | Tambah config `trusted_proxies: Vec<String>`. XFF hanya dipakai jika request dari IP yang ada di list. Default empty = XFF diabaikan | `config.rs`, `oauth.rs` |
+| S4 | **Medium** | Cookie tanpa `Secure` flag | `Secure` flag auto-set jika `issuer` pakai `https://` | `dashboard.rs` |
+
+### 10.2 Bug Fixes
+
+| ID | Severity | Issue | Fix | File |
+|----|----------|-------|-----|------|
+| B2 | **Medium** | `ensure_dashboard_client` hardcode redirect_uri `localhost:8768` | Pakai `config.issuer` untuk generate redirect_uri dinamis | `main.rs` |
+| B3 | **Low** | `verify_session_cookie` compute MAC dua kali (dead code) | Hapus double computation, pakai `verify_slice` saja | `session.rs` |
+| B4 | **Low** | `merge_from_file` parse seluruh file sebagai `WebConfig` (bukan `[web]` section) | Parse `web_table` langsung dari TOML | `config.rs` |
+| B5 | **Low** | Dashboard `set-cookie` pakai `insert` (overwrite) untuk multiple cookies | Ganti ke `append` | `dashboard.rs` |
+
+### 10.3 Performance Fixes
+
+| ID | Severity | Issue | Fix | File |
+|----|----------|-------|-----|------|
+| P2 | **Medium** | bcrypt (~100ms) block async worker thread | `verify_user` dijalankan via `tokio::task::spawn_blocking` | `oauth.rs` |
+| P3 | **Low** | `login_attempts`, `auth_codes`, `refresh_tokens` tidak pernah di-purge | Method `purge_expired()` — purge expired/used codes + tokens, login_attempts >24h. Dipanggil di startup | `auth_store.rs`, `main.rs` |
+
+### 10.4 RFC 7591 Compliance Fixes (Claude.ai Integration)
+
+| ID | Issue | Fix | File |
+|----|-------|-----|------|
+| R1 | HTTP 200 (harusnya 201 Created) | Return `StatusCode::CREATED` | `oauth.rs` |
+| R2 | `client_id_issued_at` ISO string (harusnya epoch int) | Pakai `chrono::Utc::now().timestamp()` | `oauth.rs` |
+| R3 | Default scope `read write` (Claude butuh `offline_access`) | Default → `mcp offline_access` | `oauth.rs` |
+| R4 | `token_endpoint_auth_method: "none"` diabaikan | Dihormati → public client (no secret, PKCE-only). `client_secret` tidak di-return | `oauth.rs` |
+| R5 | Loopback redirect port exact match only | RFC 8252 §7.3: `http://localhost:PORT` match regardless of port | `oauth.rs` |
+| R6 | `RegisterRequest` reject unknown fields | Accept semua field RFC 7591 (`contacts`, `logo_uri`, `software_id`, dll) | `oauth.rs` |
+
+### 10.5 Dashboard Fixes
+
+| ID | Issue | Fix | File |
+|----|-------|-----|------|
+| D1 | Cookie `SameSite=Strict` → session hilang setelah OAuth2 redirect | Ganti ke `SameSite=Lax` (masih aman, block cross-site POST) | `dashboard.rs` |
+| D2 | `recall()` POST tanpa `X-CSRF-Token` header → CSRF error | Tambah `'X-CSRF-Token': getCSRF()` ke fetch header | `dashboard.rs` |
+
+### 10.6 Feature Enhancements
+
+| ID | Feature | Detail | File |
+|----|---------|--------|------|
+| F1 | **Daily log rotation** | `tracing-appender` crate. Config `log_dir` + `log_level`. File: `uteke-web.log.YYYY-MM-DD`, rotated at midnight. Console (stdout) + file (no ANSI). Env: `UTEKE_WEB_LOG_DIR`, `UTEKE_WEB_LOG_LEVEL` | `main.rs`, `config.rs` |
+| F2 | **CORS config** | `[web.cors]` section. `enabled`, `allow_origins`, `allow_methods`, `allow_headers`, `allow_credentials`, `max_age_secs`. `tower-http::cors::CorsLayer`. Default: disabled (backward compatible) | `config.rs`, `app.rs` |
+| F3 | **E2E test runbook** | 35 test cases dalam 12 phase. `e2e-test/e2e-uteke-web.md` | `e2e-test/` |
+
+### 10.7 Config Additions (uteke.toml)
+
+```toml
+[web]
+# ... existing fields ...
+
+# Logging (F1)
+log_dir = "~/.codecora/uteke/logs"     # empty = stdout only
+log_level = "info"                      # error|warn|info|debug|trace
+
+# Trusted proxies (S3)
+trusted_proxies = ["127.0.0.1"]         # IPs yang boleh set X-Forwarded-For
+
+[web.cors]                              # F2
+enabled = false
+allow_origins = ["*"]
+allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+allow_headers = ["Authorization", "Content-Type", "X-CSRF-Token"]
+allow_credentials = false
+max_age_secs = 3600
+```
+
+### 10.8 Test Coverage
+
+- **142 test lulus** (75 unit + 16 integration dashboard_api + 51 integration handler)
+- Coverage: **83.02%** line, 89.39% library (excluding `main.rs`) — sebelum M7.1–M7.6
+- `cargo clippy --all-targets -- -D warnings` lulus
+- `cargo fmt` lulus

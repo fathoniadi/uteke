@@ -9,6 +9,7 @@ pub mod auth_store;
 pub mod cli;
 pub mod config;
 pub mod dashboard;
+pub mod dashboard_api;
 pub mod jwt;
 pub mod metrics;
 pub mod oauth;

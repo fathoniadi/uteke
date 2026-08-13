@@ -330,6 +330,66 @@ Namespace is resolved in this order (highest priority first):
 
 Switch default namespace permanently with `uteke namespace switch <name>` — this updates the config file.
 
+## uteke-web (`[web]` section)
+
+The `[web]` section configures `uteke-web` — the OAuth2 auth server + reverse proxy + dashboard binary. Only `[web]` is consumed by `uteke-web`; the rest of `uteke.toml` is owned by the other crates.
+
+```toml
+[web]
+listen = "127.0.0.1:8768"
+issuer = "http://localhost:8768"
+upstream = "http://127.0.0.1:8767"
+upstream_token = "static-token-injected-to-upstream"
+jwt_secret = "at-least-32-bytes-hs256-secret"
+db_path = "~/.codecora/uteke/uteke-web.db"
+audit_log_path = "~/.codecora/uteke/uteke-web-audit.jsonl"
+
+[web.dashboard]
+enabled = true
+session_ttl_hours = 24
+
+[web.tls]
+# cert = "/path/cert.pem"
+# key  = "/path/key.pem"
+
+[web.cors]
+enabled = false
+allow_origins = ["*"]
+allow_credentials = false
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `listen` | `127.0.0.1:8768` | Bind address |
+| `issuer` | `http://localhost:8768` | Base URL for OAuth2 endpoints |
+| `upstream` | `http://127.0.0.1:8767` | uteke-server URL to reverse-proxy to |
+| `upstream_token` | (empty) | Static token injected as `Authorization: Bearer <token>` to upstream |
+| `jwt_secret` | (empty) | HS256 signing secret (≥32 bytes); env `UTEKE_WEB_JWT_SECRET` |
+| `db_path` | `~/.codecora/uteke/uteke-web.db` | SQLite auth store path |
+| `audit_log_path` | `~/.codecora/uteke/uteke-web-audit.jsonl` | Audit trail JSONL |
+| `dashboard.enabled` | `true` | Enable the dashboard web UI |
+| `dashboard.session_ttl_hours` | `24` | Session TTL in hours |
+| `tls.cert` / `tls.key` | (empty) | Optional standalone TLS |
+| `cors.enabled` | `false` | Enable CORS for browser-facing endpoints |
+
+### Dashboard typed API (`/dashboard/api/*`)
+
+The dashboard SPA talks to a clean REST contract owned by `uteke-web`; the browser never sees the upstream uteke-server endpoint shape. All handlers require a valid session cookie; mutations (POST/PUT/DELETE) additionally require a matching `X-CSRF-Token` header (double-submit cookie).
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/dashboard/api/memories` | Browse / search (`?q=&mode=list\|semantic\|fts&tag=&namespace=&limit=20&offset=0`) |
+| `GET` | `/dashboard/api/memories/{id}` | Memory detail |
+| `POST` | `/dashboard/api/memories` | Create (`{content, tags, namespace?, memory_type?}`) |
+| `PUT` | `/dashboard/api/memories/{id}` | Edit (`{content?, tags?, memory_type?, importance?, pinned?}`) |
+| `DELETE` | `/dashboard/api/memories/{id}` | Forget (soft-delete) |
+| `GET` | `/dashboard/api/tags` | Tag list with counts (`?namespace=`) |
+| `GET` | `/dashboard/api/namespaces` | Namespace list |
+| `GET` | `/dashboard/api/stats` | Store stats (`?namespace=`) |
+| `GET` | `/dashboard/api/profile` | Current user (from session, no upstream call) |
+
+`memory_type` is validated against the fixed taxonomy: `fact`, `procedure`, `preference`, `decision`, `context`, `note`, `insight`, `reference`, `event`. Invalid values are dropped.
+
 ## Per-Project Config
 
 Place a `.uteke/uteke.toml` in your project root to override defaults for that project:

@@ -69,6 +69,7 @@ impl TestApp {
 }
 
 /// Spawn a mock upstream server on an ephemeral port. Returns its address.
+#[allow(dead_code)] // not every test binary uses this helper
 pub async fn spawn_mock_upstream() -> SocketAddr {
     use axum::Router;
     use axum::extract::State as AxumState;

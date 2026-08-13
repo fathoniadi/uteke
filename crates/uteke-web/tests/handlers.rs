@@ -864,13 +864,41 @@ async fn dashboard_api_without_session_returns_401() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/dashboard/api/recall")
+                .uri("/dashboard/api/memories")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn dashboard_trailing_slash_also_redirects_to_authorize() {
+    // Regression: `/dashboard/` (trailing slash) used to fall through to the
+    // catch-all proxy and return 401 instead of the OAuth2 login redirect.
+    let app = TestApp::new().await;
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let loc = resp
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(loc.contains("/oauth2/auth"));
+    assert!(loc.contains("client_id=uteke-web-dashboard"));
 }
 
 #[tokio::test]
@@ -885,13 +913,13 @@ async fn dashboard_api_with_valid_session_proxies() {
         .unwrap();
     let cookie_val =
         uteke_web::session::sign_session_cookie(&session_id, &app.state.config.jwt_secret);
-    // GET doesn't need CSRF.
+    // Typed GET (stats) doesn't need CSRF; upstream not running → 502.
     let resp = app
         .router
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/dashboard/api/health")
+                .uri("/dashboard/api/stats")
                 .header("cookie", format!("uteke_session={cookie_val}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -913,14 +941,16 @@ async fn dashboard_api_post_without_csrf_returns_403() {
         .unwrap();
     let cookie_val =
         uteke_web::session::sign_session_cookie(&session_id, &app.state.config.jwt_secret);
+    // Typed create endpoint requires CSRF on mutations.
     let resp = app
         .router
         .clone()
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri("/dashboard/api/remember")
+                .uri("/dashboard/api/memories")
                 .header("cookie", format!("uteke_session={cookie_val}"))
+                .header("content-type", "application/json")
                 .body(Body::from(r#"{"content":"hi"}"#))
                 .unwrap(),
         )
@@ -1193,66 +1223,9 @@ async fn proxy_strips_cors_headers_from_upstream() {
 }
 
 // ── Dashboard API with mock upstream ────────────────────────────────────────
-
-#[tokio::test]
-async fn dashboard_api_get_with_session_proxies_to_upstream() {
-    let upstream = common::spawn_mock_upstream().await;
-    let app = TestApp::with_upstream(upstream).await;
-    let session_id = uteke_web::session::new_session_id();
-    let csrf = uteke_web::session::new_csrf_token();
-    app.state
-        .store
-        .add_session(&session_id, "alice", &csrf, 3600)
-        .unwrap();
-    let cookie_val =
-        uteke_web::session::sign_session_cookie(&session_id, &app.state.config.jwt_secret);
-    let resp = app
-        .router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/dashboard/api/recall")
-                .header("cookie", format!("uteke_session={cookie_val}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["path"], "/recall");
-}
-
-#[tokio::test]
-async fn dashboard_api_post_with_valid_csrf_proxies() {
-    let upstream = common::spawn_mock_upstream().await;
-    let app = TestApp::with_upstream(upstream).await;
-    let session_id = uteke_web::session::new_session_id();
-    let csrf = uteke_web::session::new_csrf_token();
-    app.state
-        .store
-        .add_session(&session_id, "alice", &csrf, 3600)
-        .unwrap();
-    let cookie_val =
-        uteke_web::session::sign_session_cookie(&session_id, &app.state.config.jwt_secret);
-    let resp = app
-        .router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri("/dashboard/api/remember")
-                .header("cookie", format!("uteke_session={cookie_val}"))
-                .header("x-csrf-token", &csrf)
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"content":"hi"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-}
+// The full typed-handler integration suite (with a shape-accurate mock
+// upstream) lives in `tests/dashboard_api.rs`. The cases below cover the
+// session/expiry gating that is specific to this handler set.
 
 #[tokio::test]
 async fn dashboard_api_expired_session_returns_401() {
@@ -1265,7 +1238,7 @@ async fn dashboard_api_expired_session_returns_401() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/dashboard/api/recall")
+                .uri("/dashboard/api/memories")
                 .header("cookie", format!("uteke_session={cookie_val}"))
                 .body(Body::empty())
                 .unwrap(),
