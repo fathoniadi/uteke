@@ -271,6 +271,7 @@ fn dashboard_spa() -> String {
   .imp-bar { width: 64px; height: 6px; background: #e2e8f0; border-radius: 999px; overflow: hidden; display: inline-block; vertical-align: middle; }
   .imp-bar > span { display: block; height: 100%; }
   .type-badge { text-transform: lowercase; font-weight: 600; font-size: 0.72rem; }
+  .type-text { text-transform: lowercase; font-weight: 600; font-size: 0.82rem; }
   .table td { vertical-align: middle; }
   .table thead th { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: #64748b; }
   .chips { display: flex; flex-wrap: wrap; gap: 0.3rem; padding: 0.35rem; border: 1px solid #dee2e6; border-radius: 0.375rem; min-height: 2.6rem; align-items: center; }
@@ -581,7 +582,7 @@ function render(){
   else {
     $("empty").style.display="none";
     tb.innerHTML = rows.map(m=>{
-      const tags = (m.tags||[]).map(t=>`<span class="badge bg-info text-dark tag-pill me-1" onclick="filterTag('${esc(t)}')">${esc(t)}</span>`).join("");
+      const tags = (m.tags||[]).map(t=>`<span class="badge bg-info text-white tag-pill me-1" onclick="filterTag('${esc(t)}')">${esc(t)}</span>`).join("");
       const imp = m.importance??0;
       const pin = m.pinned ? "★" : "☆";
       const pinClr = m.pinned ? "text-warning" : "text-secondary";
@@ -589,7 +590,7 @@ function render(){
         <td><span class="${pinClr} cursor-pointer" onclick="togglePin('${esc(m.id)}', ${!m.pinned})">${pin}</span></td>
         <td class="content-cell"><div class="trunc" onclick="openDetail('${esc(m.id)}')">${esc(m.content)}</div></td>
         <td>${tags}</td>
-        <td><span class="badge type-badge bg-${typeColor(m.memory_type||"note")}">${esc(m.memory_type||"note")}</span></td>
+        <td><span class="text-${typeColor(m.memory_type||"note")} type-text">${esc(m.memory_type||"note")}</span></td>
         <td><span class="imp-bar"><span style="width:${Math.round(imp*100)}%;background:${impColor(imp)}"></span></span> <span class="text-muted small">${imp.toFixed(2)}</span></td>
         <td style="white-space:nowrap" class="small">${fmtDate(m.created_at)}</td>
         <td><span class="id-mono" onclick="openDetail('${esc(m.id)}')">${esc(shortId(m.id))}</span></td>
@@ -678,7 +679,7 @@ async function openDetail(id){
         <dt class="col-sm-3">ID</dt><dd class="col-sm-9 id-mono">${esc(m.id)}</dd>
         <dt class="col-sm-3">Content</dt><dd class="col-sm-9" style="white-space:pre-wrap;word-break:break-word">${esc(m.content)}</dd>
         <dt class="col-sm-3">Type</dt><dd class="col-sm-9"><span class="badge type-badge bg-${typeColor(m.memory_type||"note")}">${esc(m.memory_type||"note")}</span></dd>
-        <dt class="col-sm-3">Tags</dt><dd class="col-sm-9">${(m.tags||[]).map(t=>`<span class="badge bg-info text-dark me-1">${esc(t)}</span>`).join("") || "—"}</dd>
+        <dt class="col-sm-3">Tags</dt><dd class="col-sm-9">${(m.tags||[]).map(t=>`<span class="badge bg-info text-white me-1">${esc(t)}</span>`).join("") || "—"}</dd>
         <dt class="col-sm-3">Importance</dt><dd class="col-sm-9"><span class="imp-bar"><span style="width:${Math.round((m.importance??0)*100)}%;background:${impColor(m.importance??0)}"></span></span> ${(m.importance??0).toFixed(2)}</dd>
         <dt class="col-sm-3">Pinned</dt><dd class="col-sm-9">${m.pinned ? "★ yes" : "no"}</dd>
         <dt class="col-sm-3">Namespace</dt><dd class="col-sm-9">${esc(m.namespace||"—")}</dd>
