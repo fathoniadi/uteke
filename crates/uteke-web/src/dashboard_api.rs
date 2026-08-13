@@ -745,6 +745,8 @@ pub struct DashboardDocumentSummary {
     pub has_children: bool,
     /// Manual ordering within siblings.
     pub sort_order: i64,
+    /// Version number (incremented on each edit).
+    pub version: i64,
     pub updated_at: String,
 }
 
@@ -758,6 +760,7 @@ impl From<DocumentSummary> for DashboardDocumentSummary {
             depth: s.depth,
             has_children: s.has_children,
             sort_order: s.sort_order,
+            version: s.version,
             updated_at: s.updated_at,
         }
     }
@@ -1081,11 +1084,22 @@ pub async fn handle_create_document(
         Ok(r) => r,
         Err(e) => return upstream_err(e),
     };
-    let created: Document = match parse_json(resp).await {
+    // #doc/create only returns {id, slug}, not the full Document — fetch it
+    // to build a response consistent with the other document endpoints
+    // (previously this tried to decode the create response as a full
+    // Document and always failed with "upstream decode error").
+    let created: serde_json::Value = match parse_json(resp).await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    Json(DashboardDocument::from(created)).into_response()
+    let slug = created
+        .get("slug")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&req.slug);
+    match fetch_document(&client, slug).await {
+        Ok(d) => Json(d).into_response(),
+        Err(r) => r,
+    }
 }
 
 /// `PUT /dashboard/api/documents/{slug}` — partial update.

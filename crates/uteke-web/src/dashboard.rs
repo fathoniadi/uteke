@@ -405,6 +405,7 @@ fn dashboard_spa() -> String {
         <div class="col-6 col-md-3">
           <label class="form-label small text-muted mb-1">Sort</label>
           <select id="sort" class="form-select form-select-sm">
+            <option value="score:desc">Relevance</option>
             <option value="created:desc">Newest</option>
             <option value="created:asc">Oldest</option>
             <option value="importance:desc">Importance ↓</option>
@@ -488,6 +489,7 @@ fn dashboard_spa() -> String {
       <h4 id="doc-detail-title" class="mb-0"></h4>
       <div class="btn-group btn-group-sm">
         <button class="btn btn-outline-secondary" onclick="docBackToList()"><i class="bi bi-arrow-left"></i> Back</button>
+        <button class="btn btn-outline-success" onclick="docOpenCreate(D.currentSlug)"><i class="bi bi-plus-lg"></i> New child</button>
         <button class="btn btn-outline-primary" onclick="docOpenEdit()"><i class="bi bi-pencil"></i> Edit</button>
         <button class="btn btn-outline-warning" onclick="docOpenMove()"><i class="bi bi-diagram-3"></i> Move</button>
         <button class="btn btn-outline-danger" onclick="docOpenDelete()"><i class="bi bi-trash"></i> Delete</button>
@@ -503,6 +505,10 @@ fn dashboard_spa() -> String {
         <div id="doc-detail-tags" class="mb-2"></div>
         <div id="doc-detail-content" class="doc-markdown"></div>
       </div>
+    </div>
+    <div class="card mb-3" id="doc-children-card" style="display:none;">
+      <div class="card-header small text-muted">Child documents</div>
+      <div class="list-group list-group-flush" id="doc-children-body"></div>
     </div>
     <div class="card" id="doc-memrefs-card" style="display:none;">
       <div class="card-header small text-muted">Referenced by memories</div>
@@ -522,11 +528,11 @@ fn dashboard_spa() -> String {
           <div class="col-md-6"><label class="form-label">Title</label><input id="doc-edit-title-input" class="form-control" placeholder="Document title"></div>
         </div>
         <div class="mb-3"><label class="form-label">Tags</label><div class="chips" id="doc-edit-tags"></div></div>
-        <div class="mb-3">
-          <label class="form-label">Parent (slug)</label>
-          <input id="doc-edit-parent" class="form-control" list="doc-parent-list" placeholder="(root — leave empty for top-level)">
-          <datalist id="doc-parent-list"></datalist>
+        <div class="mb-3" id="doc-edit-parent-locked" style="display:none;">
+          <label class="form-label">Parent</label>
+          <div><span class="badge bg-secondary" id="doc-edit-parent-locked-label"></span></div>
         </div>
+        <datalist id="doc-parent-list"></datalist>
         <div class="mb-3"><label class="form-label">Content (Markdown)</label><textarea id="doc-edit-content" class="form-control" rows="12"></textarea></div>
       </div>
       <div class="modal-footer">
@@ -688,6 +694,12 @@ function makeChips(el, tags){
   el.innerHTML = "";
   const input = document.createElement("input");
   input.placeholder = "add tag + Enter";
+  // Mobile keyboards show a "Next" arrow instead of "Enter" for plain text
+  // inputs when other focusable fields follow in the DOM (e.g. the content
+  // textarea) — tapping it jumps focus directly, bypassing keydown entirely.
+  // enterkeyhint="done" makes mobile keyboards show a submit-style action
+  // that still dispatches a real Enter keydown instead of just moving focus.
+  input.setAttribute("enterkeyhint", "done");
   el._get = () => Array.from(el.querySelectorAll(".chip span")).map(s => s.textContent);
   function addTag(t){
     t = t.trim(); if(!t) return;
@@ -787,6 +799,7 @@ function applySort(rows){
     let va = a[field], vb = b[field];
     if(field === "created"){ va = a.created_at? new Date(a.created_at).getTime():0; vb = b.created_at? new Date(b.created_at).getTime():0; }
     else if(field === "importance"){ va = a.importance??0; vb = b.importance??0; }
+    else if(field === "score"){ va = a.score??0; vb = b.score??0; }
     else if(field === "memory_type" || field === "id"){ va = va||""; vb = vb||""; }
     if(va < vb) return -1*mul; if(va > vb) return 1*mul; return 0;
   });
@@ -882,10 +895,21 @@ function onSearchInput(){
     // search box actually searches instead of silently browsing.
     if(S.q && S.mode==="list"){ S.mode="semantic"; $("mode").value="semantic"; }
     if(!S.q && (S.mode==="semantic"||S.mode==="fts")){ S.mode="list"; $("mode").value="list"; }
+    // Search modes are ranked by relevance — default the sort to match,
+    // unless the user already picked something else.
+    if((S.mode==="semantic"||S.mode==="fts") && S.sort==="created:desc"){ S.sort="score:desc"; $("sort").value="score:desc"; }
+    if(S.mode==="list" && S.sort==="score:desc"){ S.sort="created:desc"; $("sort").value="created:desc"; }
     load();
   }, 300);
 }
-function onModeChange(){ S.mode = $("mode").value; S.offset = 0; if((S.mode==="semantic"||S.mode==="fts") && !S.q){ $("q").focus(); } load(); }
+function onModeChange(){
+  S.mode = $("mode").value; S.offset = 0;
+  if((S.mode==="semantic"||S.mode==="fts")){
+    if(!S.q) $("q").focus();
+    if(S.sort==="created:desc"){ S.sort="score:desc"; $("sort").value="score:desc"; }
+  } else if(S.sort==="score:desc"){ S.sort="created:desc"; $("sort").value="created:desc"; }
+  load();
+}
 function onNsChange(){ S.ns = $("ns").value; S.offset = 0; loadTags(); loadStats(); load(); }
 function onTagChange(){ S.tag = $("tag").value; S.offset = 0; load(); }
 function onSortChange(){ S.sort = $("sort").value; render(); }
@@ -1017,7 +1041,7 @@ function init(){
 init();
 
 // ── Documents (PLAN-docs.md D3–D5) ───────────────────────────────────────
-let D = { q:"", mode:"hybrid", filter:"all", rows:[], currentSlug:null, editSlug:null, easyMDE:null };
+let D = { q:"", mode:"hybrid", filter:"all", rows:[], currentSlug:null, editSlug:null, easyMDE:null, createParent:null };
 let docModals = {};
 
 function initDocModals(){
@@ -1074,42 +1098,61 @@ async function docLoad(){
     docRenderTree();
   } catch(e){ toast("Doc load failed: "+e.message); }
 }
+function docRowHtml(d, indent){
+  const childIcon = d.has_children ? '<i class="bi bi-folder me-1"></i>' : '<i class="bi bi-file-earmark-text me-1"></i>';
+  const score = d._score != null ? ` <span class="badge bg-success bg-opacity-25 text-success small">${d._score.toFixed(2)}</span>` : "";
+  const snippet = d._snippet ? `<div class="small text-muted mt-1" style="max-width:600px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d._snippet)}</div>` : "";
+  const slug = d.slug || "";
+  const title = d.title || d.slug || "";
+  const version = d.version != null ? d.version : 0;
+  const go = `window.location.hash='#/documents/${encodeURIComponent(slug)}'`;
+  const act = (fn) => `event.stopPropagation(); D.currentSlug='${esc(slug)}'; ${fn}`;
+  return `<div class="doc-tree-item" style="padding-left:${indent+12}px" onclick="${go}">
+    <div class="d-flex justify-content-between align-items-start gap-2">
+      <div class="flex-grow-1 min-w-0">
+        <div class="doc-row-id">${esc(shortId(d.id))}</div>
+        <div class="doc-row-slug">${esc(slug)} <span class="badge bg-secondary ms-1">v${version}</span>${score}</div>
+        <div class="doc-row-title">${childIcon}${esc(title)}</div>${snippet}
+      </div>
+      <div class="doc-row-actions pt-1">
+        <div class="dropdown" onclick="event.stopPropagation()">
+          <button class="btn btn-sm btn-outline-secondary border-0 py-0 px-1" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-three-dots-vertical"></i></button>
+          <ul class="dropdown-menu dropdown-menu-end">
+            <li><button class="dropdown-item" type="button" onclick="${act('docOpenEdit()')}"><i class="bi bi-pencil me-1"></i>Edit</button></li>
+            <li><button class="dropdown-item" type="button" onclick="${act('docOpenMove()')}"><i class="bi bi-diagram-3 me-1"></i>Move</button></li>
+            <li><button class="dropdown-item text-danger" type="button" onclick="${act('docOpenDelete()')}"><i class="bi bi-trash me-1"></i>Delete</button></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
 function docRenderTree(){
   const tree = document.getElementById("doc-tree");
   const info = document.getElementById("doc-list-info");
   if(!D.rows.length){ tree.innerHTML=""; document.getElementById("doc-empty").style.display="block"; info.textContent="No documents"; return; }
   document.getElementById("doc-empty").style.display="none";
+  if(D.q){
+    // Search mode: results are ranked chunk matches, not a containment
+    // hierarchy — render as a flat list ordered by relevance score
+    // instead of grouping/sorting by parent_id + sort_order (#bug found
+    // 2026-08-13: score was fetched but never used for ordering).
+    const rows = [...D.rows].sort((a,b) => (b._score??0) - (a._score??0));
+    tree.innerHTML = rows.map(d => docRowHtml(d, 0)).join("");
+    info.textContent = `${D.rows.length} result${D.rows.length !== 1 ? "s" : ""}`;
+    return;
+  }
   // Build tree by parent_id
   const byParent = {};
   D.rows.forEach(d => { const p = d.parent_id || "__root__"; (byParent[p] = byParent[p] || []).push(d); });
   function renderLevel(parentId, depth){
     const items = byParent[parentId] || [];
     items.sort((a,b) => (a.sort_order||0) - (b.sort_order||0) || a.title.localeCompare(b.title));
-    return items.map(d => {
-      const indent = depth * 24;
-      const childIcon = d.has_children ? '<i class="bi bi-folder me-1"></i>' : '<i class="bi bi-file-earmark-text me-1"></i>';
-      const score = d._score != null ? ` <span class="badge bg-success bg-opacity-25 text-success small">${d._score.toFixed(2)}</span>` : "";
-      const snippet = d._snippet ? `<div class="small text-muted mt-1" style="max-width:600px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d._snippet)}</div>` : "";
-      const slug = d.slug || "";
-      const title = d.title || d.slug || "";
-      const version = d.version != null ? d.version : 0;
-      const go = `window.location.hash='#/documents/${encodeURIComponent(slug)}'`;
-      const act = (fn) => `event.stopPropagation(); D.currentSlug='${esc(slug)}'; ${fn}`;
-      return `<div class="doc-tree-item" style="padding-left:${indent+12}px" onclick="${go}">
-        <div class="d-flex justify-content-between align-items-start gap-2">
-          <div class="flex-grow-1 min-w-0">
-            <div class="doc-row-id">${esc(shortId(d.id))}</div>
-            <div class="doc-row-slug">${esc(slug)} <span class="badge bg-secondary ms-1">v${version}</span>${score}</div>
-            <div class="doc-row-title">${childIcon}${esc(title)}</div>${snippet}
-          </div>
-          <div class="doc-row-actions d-flex gap-1 pt-1">
-            <button class="btn btn-sm btn-outline-primary py-0 px-1" title="Edit" onclick="${act('docOpenEdit()')}"><i class="bi bi-pencil"></i></button>
-            <button class="btn btn-sm btn-outline-warning py-0 px-1" title="Move" onclick="${act('docOpenMove()')}"><i class="bi bi-diagram-3"></i></button>
-            <button class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete" onclick="${act('docOpenDelete()')}"><i class="bi bi-trash"></i></button>
-          </div>
-        </div>
-      </div>`;
-    }).join("");
+    // Recurse into each item's own children (looked up by its id) — without
+    // this, only top-level ("__root__") documents ever render; child docs
+    // with a correctly-set parent_id were silently dropped (#bug found
+    // 2026-08-14, reported: child doc doesn't show in list or detail).
+    return items.map(d => docRowHtml(d, depth * 24) + renderLevel(d.id, depth + 1)).join("");
   }
   tree.innerHTML = renderLevel("__root__", 0);
   info.textContent = `${D.rows.length} document${D.rows.length !== 1 ? "s" : ""}`;
@@ -1131,6 +1174,20 @@ async function docShowDetail(slug){
     // Render markdown with marked.js + sanitize with DOMPurify
     const raw = marked.parse(d.content || "");
     document.getElementById("doc-detail-content").innerHTML = DOMPurify.sanitize(raw);
+    // Load children (optional, non-fatal)
+    try {
+      const children = await apiGet("/dashboard/api/documents?parent="+encodeURIComponent(slug)+"&limit=200");
+      if(children.length){
+        children.sort((a,b) => (a.sort_order||0) - (b.sort_order||0) || a.title.localeCompare(b.title));
+        document.getElementById("doc-children-card").style.display = "";
+        document.getElementById("doc-children-body").innerHTML = children.map(c => {
+          const childIcon = c.has_children ? '<i class="bi bi-folder me-1"></i>' : '<i class="bi bi-file-earmark-text me-1"></i>';
+          return `<a href="#/documents/${encodeURIComponent(c.slug)}" class="list-group-item list-group-item-action">${childIcon}${esc(c.title || c.slug)} <span class="text-muted small">${esc(c.slug)}</span></a>`;
+        }).join("");
+      } else {
+        document.getElementById("doc-children-card").style.display = "none";
+      }
+    } catch(_){ document.getElementById("doc-children-card").style.display = "none"; }
     // Load mem-refs (optional, non-fatal)
     try {
       const refs = await apiGet("/dashboard/api/documents/"+encodeURIComponent(slug)+"/mem-refs");
@@ -1156,47 +1213,69 @@ function docBackToList(){
 }
 
 // ── Docs: create/edit ─────────────────────────────────────────────────────
-async function docLoadParentOptions(){
+async function docLoadParentOptions(excludeSlug){
   try {
     const docs = await apiGet("/dashboard/api/documents?limit=200");
+    const usable = excludeSlug ? docs.filter(d => d.slug !== excludeSlug) : docs;
+    D.parentSlugs = new Set(usable.map(d => d.slug));
     const dl = document.getElementById("doc-parent-list");
-    dl.innerHTML = docs.map(d => `<option value="${esc(d.slug)}">${esc(d.title||d.slug)}</option>`).join("");
-  } catch(_){}
+    dl.innerHTML = usable.map(d => `<option value="${esc(d.slug)}">${esc(d.title||d.slug)}</option>`).join("");
+  } catch(_){ D.parentSlugs = new Set(); }
 }
-function docOpenCreate(){
+// Datalist inputs behave like a searchable select, but the browser doesn't
+// stop free-typed text that isn't in the list — enforce that here.
+function docValidParent(inputId){
+  const v = document.getElementById(inputId).value.trim();
+  if(!v) return { ok:true, value:"" };
+  if(!D.parentSlugs || !D.parentSlugs.has(v)){
+    toast(`"${v}" is not an existing document slug — pick one from the list`);
+    return { ok:false };
+  }
+  return { ok:true, value:v };
+}
+function docOpenCreate(parentSlug){
   D.editSlug = null;
-  document.getElementById("doc-edit-title").textContent = "New document";
+  D.createParent = parentSlug || null;
+  document.getElementById("doc-edit-title").textContent = parentSlug ? `New child of ${parentSlug}` : "New document";
   document.getElementById("doc-edit-slug").value = "";
   document.getElementById("doc-edit-slug").disabled = false;
   document.getElementById("doc-edit-title-input").value = "";
-  document.getElementById("doc-edit-parent").value = "";
-  document.getElementById("doc-edit-content").value = "";
   makeChips(document.getElementById("doc-edit-tags"), []);
-  docLoadParentOptions();
+  const lockedGroup = document.getElementById("doc-edit-parent-locked");
+  if(parentSlug){
+    document.getElementById("doc-edit-parent-locked-label").textContent = parentSlug;
+    lockedGroup.style.display = "";
+  } else {
+    lockedGroup.style.display = "none";
+  }
   docModals["m-doc-edit"].show();
   // Init EasyMDE after modal is visible
-  setTimeout(() => docInitMDE(), 200);
+  setTimeout(() => docInitMDE(""), 200);
 }
 async function docOpenEdit(){
   if(!D.currentSlug) return;
   try {
     const d = await apiGet("/dashboard/api/documents/"+encodeURIComponent(D.currentSlug));
     D.editSlug = D.currentSlug;
+    D.createParent = null;
     document.getElementById("doc-edit-title").textContent = "Edit document";
     document.getElementById("doc-edit-slug").value = d.slug;
     document.getElementById("doc-edit-slug").disabled = true; // slug immutable on edit
     document.getElementById("doc-edit-title-input").value = d.title || "";
-    document.getElementById("doc-edit-parent").value = ""; // parent changed via Move
-    document.getElementById("doc-edit-content").value = d.content || "";
+    document.getElementById("doc-edit-parent-locked").style.display = "none"; // parent changed via Move
     makeChips(document.getElementById("doc-edit-tags"), d.tags || []);
-    docLoadParentOptions();
     docModals["m-doc-edit"].show();
-    setTimeout(() => docInitMDE(), 200);
+    setTimeout(() => docInitMDE(d.content || ""), 200);
   } catch(e){ toast("Failed: "+e.message); }
 }
-function docInitMDE(){
+function docInitMDE(initialContent){
+  // toTextArea() syncs the OLD editor's live content back into the
+  // textarea before tearing it down — so the value must be (re)set AFTER
+  // this call, not before, or the previous document's content leaks into
+  // the next create/edit session (#bug found 2026-08-14).
   if(D.easyMDE){ D.easyMDE.toTextArea(); D.easyMDE = null; }
   const el = document.getElementById("doc-edit-content");
+  el.value = initialContent ?? "";
   D.easyMDE = new EasyMDE({
     element: el,
     spellChecker: false,
@@ -1227,8 +1306,7 @@ async function docSubmitEdit(){
     const body = { slug, content, tags };
     const title = document.getElementById("doc-edit-title-input").value.trim();
     if(title) body.title = title;
-    const parent = document.getElementById("doc-edit-parent").value.trim();
-    if(parent) body.parent = parent;
+    if(D.createParent) body.parent = D.createParent;
     try {
       await apiMutate("/dashboard/api/documents","POST",body);
       docModals["m-doc-edit"].hide();
@@ -1243,14 +1321,15 @@ function docOpenMove(){
   if(!D.currentSlug) return;
   document.getElementById("doc-move-label").textContent = D.currentSlug;
   document.getElementById("doc-move-parent").value = "";
-  docLoadParentOptions();
+  docLoadParentOptions(D.currentSlug);
   docModals["m-doc-move"].show();
 }
 async function docConfirmMove(){
   if(!D.currentSlug) return;
-  const parent = document.getElementById("doc-move-parent").value.trim();
+  const parentCheck = docValidParent("doc-move-parent");
+  if(!parentCheck.ok) return;
   const body = {};
-  if(parent) body.new_parent = parent;
+  if(parentCheck.value) body.new_parent = parentCheck.value;
   try {
     await apiMutate("/dashboard/api/documents/"+encodeURIComponent(D.currentSlug)+"/move","POST",body);
     docModals["m-doc-move"].hide();
@@ -1290,7 +1369,7 @@ function onDocSearchInput(){
 function onDocModeChange(){ D.mode = document.getElementById("doc-mode").value; if(D.q) docLoad(); }
 function onDocFilterChange(){ D.filter = document.getElementById("doc-filter").value; if(!D.q) docLoad(); }
 function docResetFilters(){
-  D = { q:"", mode:"hybrid", filter:"all", rows:D.rows, currentSlug:D.currentSlug, editSlug:D.editSlug, easyMDE:D.easyMDE };
+  D = { q:"", mode:"hybrid", filter:"all", rows:D.rows, currentSlug:D.currentSlug, editSlug:D.editSlug, easyMDE:D.easyMDE, createParent:D.createParent };
   document.getElementById("doc-q").value = "";
   document.getElementById("doc-mode").value = "hybrid";
   document.getElementById("doc-filter").value = "all";
