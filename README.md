@@ -300,7 +300,7 @@ Both expose the same HTTP API. Other agents and tools connect via `http://your-h
 
 ## 🌐 Uteke Web — OAuth2 Gateway + Dashboard
 
-`uteke-web` adalah satu binary yang menggabungkan **OAuth2 auth server + reverse proxy + dashboard** untuk `uteke-server`. Ini penggabungan dari `uteke-oauth-proxy` dan `uteke-dashboard` jadi satu proses.
+`uteke-web` adalah satu binary yang menggabungkan **OAuth2 auth server + reverse proxy + dashboard** untuk `uteke-server`.
 
 ### Kenapa butuh uteke-web
 
