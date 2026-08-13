@@ -264,8 +264,11 @@ fn dashboard_spa() -> String {
   body { background: #f1f5f9; }
   .stat-num { font-size: 1.35rem; font-weight: 700; line-height: 1.1; }
   .stat-label { font-size: 0.7rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.04em; }
-  .content-cell { max-width: 420px; }
-  .content-cell .trunc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+  .trunc { word-break: break-word; }
+  .mem-tags { font-size: 0.78rem; color: #0369a1; word-break: break-word; margin-top: 0.15rem; }
+  .mem-created { font-size: 0.72rem; color: #94a3b8; margin-top: 0.1rem; }
+  .search-input { padding: 0.6rem 1rem; font-size: 1rem; }
+  .mem-card { border: 1px solid #e2e8f0; border-radius: 0.5rem; }
   .id-mono { font-family: ui-monospace, monospace; font-size: 0.76rem; color: #64748b; cursor: pointer; }
   .tag-pill { cursor: pointer; }
   .imp-bar { width: 64px; height: 6px; background: #e2e8f0; border-radius: 999px; overflow: hidden; display: inline-block; vertical-align: middle; }
@@ -299,11 +302,11 @@ fn dashboard_spa() -> String {
   <div class="card mb-3">
     <div class="card-body">
       <div class="row g-2 align-items-end">
-        <div class="col-md-4">
+        <div class="col-12">
           <label class="form-label small text-muted mb-1">Search</label>
-          <input id="q" class="form-control form-control-sm" placeholder="Query (semantic / keyword)…">
+          <input id="q" class="form-control search-input" placeholder="Search memories — type to search…">
         </div>
-        <div class="col-6 col-md-2">
+        <div class="col-6 col-md-3">
           <label class="form-label small text-muted mb-1">Mode</label>
           <select id="mode" class="form-select form-select-sm">
             <option value="list">Browse</option>
@@ -311,15 +314,15 @@ fn dashboard_spa() -> String {
             <option value="fts">Keyword</option>
           </select>
         </div>
-        <div class="col-6 col-md-2">
+        <div class="col-6 col-md-3">
           <label class="form-label small text-muted mb-1">Namespace</label>
           <select id="ns" class="form-select form-select-sm"></select>
         </div>
-        <div class="col-6 col-md-2">
+        <div class="col-6 col-md-3">
           <label class="form-label small text-muted mb-1">Tag</label>
           <select id="tag" class="form-select form-select-sm"></select>
         </div>
-        <div class="col-6 col-md-2">
+        <div class="col-6 col-md-3">
           <label class="form-label small text-muted mb-1">Sort</label>
           <select id="sort" class="form-select form-select-sm">
             <option value="created:desc">Newest</option>
@@ -338,30 +341,19 @@ fn dashboard_spa() -> String {
     </div>
   </div>
 
-  <!-- Table -->
-  <div class="card">
-    <div class="table-responsive">
-      <table class="table table-sm table-hover mb-0 align-middle">
-        <thead>
-          <tr>
-            <th style="width:28px;">★</th>
-            <th class="content-cell">Content</th>
-            <th>Tags</th>
-            <th>Type</th>
-            <th>Imp.</th>
-            <th>Created</th>
-            <th>ID</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody id="rows"></tbody>
-      </table>
-    </div>
-    <div id="empty" class="text-center text-muted py-4" style="display:none;">No memories.</div>
-    <div class="card-footer d-flex justify-content-end align-items-center gap-2">
-      <span class="text-muted small me-2" id="page-info"></span>
-      <nav><ul class="pagination pagination-sm mb-0" id="pager"></ul></nav>
-    </div>
+  <!-- Memory list -->
+  <div id="rows"></div>
+  <div id="empty" class="text-center text-muted py-4" style="display:none;">No memories.</div>
+  <div class="d-flex justify-content-end align-items-center gap-2 mt-3">
+    <label class="text-muted small mb-0" for="perpage">Per page</label>
+    <select id="perpage" class="form-select form-select-sm" style="width:auto;">
+      <option value="10">10</option>
+      <option value="20" selected>20</option>
+      <option value="50">50</option>
+      <option value="100">100</option>
+    </select>
+    <span class="text-muted small me-2" id="page-info"></span>
+    <nav><ul class="pagination pagination-sm mb-0" id="pager"></ul></nav>
   </div>
 </main>
 
@@ -386,7 +378,7 @@ fn dashboard_spa() -> String {
     <div class="modal-content">
       <div class="modal-header"><h5 class="modal-title">New memory</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
       <div class="modal-body">
-        <div class="mb-3"><label class="form-label">Content</label><textarea id="c-content" class="form-control" rows="4"></textarea></div>
+        <div class="mb-3"><label class="form-label">Content</label><textarea id="c-content" class="form-control" rows="10"></textarea></div>
         <div class="mb-3"><label class="form-label">Tags</label><div class="chips" id="c-tags"></div></div>
         <div class="row g-3">
           <div class="col-md-6"><label class="form-label">Namespace</label><input id="c-ns" class="form-control" list="ns-list" placeholder="default"></div>
@@ -408,7 +400,7 @@ fn dashboard_spa() -> String {
     <div class="modal-content">
       <div class="modal-header"><h5 class="modal-title">Edit memory</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
       <div class="modal-body">
-        <div class="mb-3"><label class="form-label">Content</label><textarea id="e-content" class="form-control" rows="4"></textarea></div>
+        <div class="mb-3"><label class="form-label">Content</label><textarea id="e-content" class="form-control" rows="10"></textarea></div>
         <div class="mb-3"><label class="form-label">Tags</label><div class="chips" id="e-tags"></div></div>
         <div class="row g-3">
           <div class="col-md-4"><label class="form-label">Type</label><select id="e-type" class="form-select"></select></div>
@@ -450,8 +442,7 @@ fn dashboard_spa() -> String {
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 const TYPES = ["fact","procedure","preference","decision","context","note","insight","reference","event"];
-const LIMIT = 20;
-let S = { q:"", mode:"list", ns:"", tag:"", sort:"created:desc", offset:0, rows:[], hasMore:false };
+let S = { q:"", mode:"list", ns:"", tag:"", sort:"created:desc", offset:0, limit:20, rows:[], hasMore:false };
 let detailMem = null, forgetId = null, editId = null;
 let bsModals = {};
 
@@ -460,6 +451,13 @@ function $(id){ return document.getElementById(id); }
 function esc(s){ return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 function shortId(id){ return (id||"").slice(0,8); }
 function fmtDate(s){ if(!s) return "—"; const d = new Date(s); if(isNaN(d)) return s; return d.toLocaleString(undefined,{year:"numeric",month:"short",day:"2-digit",hour:"2-digit",minute:"2-digit"}); }
+function truncSentences(text, max){
+  if(!text) return "";
+  const trimmed = text.trim();
+  const sentences = trimmed.split(/(?<=[.!?])\s+/).map(s=>s.trim()).filter(Boolean);
+  if(sentences.length <= max) return trimmed;
+  return sentences.slice(0, max).join(" ") + "…";
+}
 function toast(msg){ $("toast-body").textContent = msg; bsModals.toast.show(); }
 
 // ── Bootstrap modal helpers ──────────────────────────────────────────────
@@ -544,20 +542,23 @@ async function loadStats(){
   } catch(_){ $("stats").innerHTML = ""; }
 }
 
+let loadSeq = 0;
 async function load(){
+  const seq = ++loadSeq;
   const params = new URLSearchParams();
   if(S.q) params.set("q", S.q);
   if(S.mode) params.set("mode", S.mode);
   if(S.tag) params.set("tag", S.tag);
   if(S.ns) params.set("namespace", S.ns);
-  params.set("limit", LIMIT);
+  params.set("limit", S.limit);
   params.set("offset", S.offset);
   try {
     const data = await apiGet("/dashboard/api/memories?"+params.toString());
+    if(seq !== loadSeq) return; // stale response — a newer load() superseded this
     S.rows = data.memories || [];
     S.hasMore = !!data.has_more;
     render();
-  } catch(e){ toast("Load failed: "+e.message); }
+  } catch(e){ if(seq === loadSeq) toast("Load failed: "+e.message); }
 }
 
 // ── Render ───────────────────────────────────────────────────────────────
@@ -582,29 +583,36 @@ function render(){
   else {
     $("empty").style.display="none";
     tb.innerHTML = rows.map(m=>{
-      const tags = (m.tags||[]).map(t=>`<span class="badge bg-info text-white tag-pill me-1" onclick="filterTag('${esc(t)}')">${esc(t)}</span>`).join("");
+      const tagsPills = (m.tags||[]).map(t=>`<span class="badge bg-info text-white tag-pill me-1" onclick="event.stopPropagation(); filterTag('${esc(t)}')">${esc(t)}</span>`).join("");
       const imp = m.importance??0;
       const pin = m.pinned ? "★" : "☆";
       const pinClr = m.pinned ? "text-warning" : "text-secondary";
-      return `<tr>
-        <td><span class="${pinClr} cursor-pointer" onclick="togglePin('${esc(m.id)}', ${!m.pinned})">${pin}</span></td>
-        <td class="content-cell"><div class="trunc" onclick="openDetail('${esc(m.id)}')">${esc(m.content)}</div></td>
-        <td>${tags}</td>
-        <td><span class="text-${typeColor(m.memory_type||"note")} type-text">${esc(m.memory_type||"note")}</span></td>
-        <td><span class="imp-bar"><span style="width:${Math.round(imp*100)}%;background:${impColor(imp)}"></span></span> <span class="text-muted small">${imp.toFixed(2)}</span></td>
-        <td style="white-space:nowrap" class="small">${fmtDate(m.created_at)}</td>
-        <td><span class="id-mono" onclick="openDetail('${esc(m.id)}')">${esc(shortId(m.id))}</span></td>
-        <td>
-          <div class="btn-group btn-group-sm">
-            <button class="btn btn-outline-secondary" onclick="openDetail('${esc(m.id)}')"><i class="bi bi-eye"></i></button>
-            <button class="btn btn-outline-primary" onclick="openEdit('${esc(m.id)}')"><i class="bi bi-pencil"></i></button>
-            <button class="btn btn-outline-danger" onclick="openForget('${esc(m.id)}', '${esc(shortId(m.id))}')"><i class="bi bi-trash"></i></button>
+      return `<div class="card mem-card mb-2">
+        <div class="card-body py-2 px-3">
+          <div class="d-flex align-items-center gap-2 mb-1">
+            <span class="${pinClr} cursor-pointer" onclick="togglePin('${esc(m.id)}', ${!m.pinned})" title="Pin">${pin}</span>
+            <span class="id-mono cursor-pointer" onclick="openDetail('${esc(m.id)}')">${esc(shortId(m.id))}</span>
+            <div class="dropdown ms-auto">
+              <button class="btn btn-sm btn-outline-secondary border-0 py-0 px-1" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-three-dots-vertical"></i></button>
+              <ul class="dropdown-menu dropdown-menu-end">
+                <li><button class="dropdown-item" type="button" onclick="openEdit('${esc(m.id)}')"><i class="bi bi-pencil me-1"></i>Edit</button></li>
+                <li><button class="dropdown-item text-danger" type="button" onclick="openForget('${esc(m.id)}', '${esc(shortId(m.id))}')"><i class="bi bi-trash me-1"></i>Delete</button></li>
+              </ul>
+            </div>
           </div>
-        </td>
-      </tr>`;
+          <div class="trunc cursor-pointer" onclick="openDetail('${esc(m.id)}')">${esc(truncSentences(m.content, 2))}</div>
+          <div class="d-flex align-items-center gap-2 mt-1">
+            <span class="small text-muted">Importance</span>
+            <span class="imp-bar"><span style="width:${Math.round(imp*100)}%;background:${impColor(imp)}"></span></span>
+            <span class="small text-muted">${imp.toFixed(2)}</span>
+          </div>
+          ${tagsPills ? `<div class="mem-tags">${tagsPills}</div>` : ""}
+          <div class="mem-created">created: ${fmtDate(m.created_at)}</div>
+        </div>
+      </div>`;
     }).join("");
   }
-  const page = Math.floor(S.offset / LIMIT) + 1;
+  const page = Math.floor(S.offset / S.limit) + 1;
   // Build Bootstrap pagination with page numbers.
   // We only know "has_more" (next page exists), not total count, so we
   // render a sliding window: show current page, ±2 neighbors, plus first/last
@@ -655,6 +663,9 @@ function onSearchInput(){
   debounceT = setTimeout(()=>{
     S.q = $("q").value.trim();
     S.offset = 0;
+    // Typing a query from Browse auto-switches to semantic search so the
+    // search box actually searches instead of silently browsing.
+    if(S.q && S.mode==="list"){ S.mode="semantic"; $("mode").value="semantic"; }
     if(!S.q && (S.mode==="semantic"||S.mode==="fts")){ S.mode="list"; $("mode").value="list"; }
     load();
   }, 300);
@@ -663,11 +674,12 @@ function onModeChange(){ S.mode = $("mode").value; S.offset = 0; if((S.mode==="s
 function onNsChange(){ S.ns = $("ns").value; S.offset = 0; loadTags(); loadStats(); load(); }
 function onTagChange(){ S.tag = $("tag").value; S.offset = 0; load(); }
 function onSortChange(){ S.sort = $("sort").value; render(); }
+function onPerPage(){ S.limit = parseInt($("perpage").value,10)||20; S.offset = 0; load(); }
 function filterTag(t){ $("tag").value = t; S.tag = t; S.offset = 0; load(); }
-function resetFilters(){ S={q:"",mode:"list",ns:"",tag:"",sort:"created:desc",offset:0,rows:[],hasMore:false}; $("q").value=""; $("mode").value="list"; $("ns").value=""; $("tag").value=""; $("sort").value="created:desc"; loadTags(); loadStats(); load(); }
-function pagePrev(){ if(S.offset>=LIMIT){ S.offset-=LIMIT; load(); } }
-function pageNext(){ if(S.hasMore){ S.offset+=LIMIT; load(); } }
-function goToPage(p){ const off = (p - 1) * LIMIT; if(off >= 0 && off !== S.offset){ S.offset = off; load(); } }
+function resetFilters(){ clearTimeout(debounceT); const lim = S.limit||20; S={q:"",mode:"list",ns:"",tag:"",sort:"created:desc",offset:0,limit:lim,rows:[],hasMore:false}; $("q").value=""; $("mode").value="list"; $("ns").value=""; $("tag").value=""; $("sort").value="created:desc"; loadTags(); loadStats(); load(); }
+function pagePrev(){ if(S.offset>=S.limit){ S.offset-=S.limit; load(); } }
+function pageNext(){ if(S.hasMore){ S.offset+=S.limit; load(); } }
+function goToPage(p){ const off = (p - 1) * S.limit; if(off >= 0 && off !== S.offset){ S.offset = off; load(); } }
 
 // ── Detail ───────────────────────────────────────────────────────────────
 async function openDetail(id){
@@ -783,6 +795,7 @@ function init(){
   $("ns").addEventListener("change", onNsChange);
   $("tag").addEventListener("change", onTagChange);
   $("sort").addEventListener("change", onSortChange);
+  $("perpage").addEventListener("change", onPerPage);
   $("e-imp").addEventListener("input", e => $("e-imp-val").textContent = parseFloat(e.target.value).toFixed(2));
   loadProfile(); loadNamespaces(); loadTags(); loadStats(); load();
 }
