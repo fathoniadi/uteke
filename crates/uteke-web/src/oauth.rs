@@ -172,8 +172,58 @@ fn resolve_client(
 }
 
 /// Check if a redirect_uri is allowed for a client.
+///
+/// Per RFC 8252 §7.3, loopback redirects (http://localhost or
+/// http://127.0.0.1) may use any port — the port is ignored when matching.
+/// Non-loopback URIs must match exactly.
 fn redirect_uri_allowed(client: &crate::auth_store::Client, uri: &str) -> bool {
-    client.redirect_uris.iter().any(|allowed| allowed == uri)
+    client.redirect_uris.iter().any(|allowed| {
+        if allowed == uri {
+            return true;
+        }
+        // Loopback exception: ignore port for localhost/127.0.0.1.
+        if let (Some(a), Some(u)) = (parse_uri_parts(allowed), parse_uri_parts(uri)) {
+            if a.scheme == u.scheme
+                && a.host == u.host
+                && a.path == u.path
+                && is_loopback(&a.host)
+                && a.scheme == "http"
+            {
+                return true;
+            }
+        }
+        false
+    })
+}
+
+/// Parsed URI components (scheme, host, port, path) for redirect_uri matching.
+struct UriParts {
+    scheme: String,
+    host: String,
+    #[allow(dead_code)]
+    port: Option<String>,
+    path: String,
+}
+
+/// Parse a URI into scheme, host, port, path.
+fn parse_uri_parts(uri: &str) -> Option<UriParts> {
+    let (scheme, rest) = uri.split_once("://")?;
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let (host, port) = authority
+        .rsplit_once(':')
+        .map(|(h, p)| (h.to_string(), Some(p.to_string())))
+        .unwrap_or((authority.to_string(), None));
+    Some(UriParts {
+        scheme: scheme.to_string(),
+        host,
+        port,
+        path: format!("/{path}"),
+    })
+}
+
+/// True if host is a loopback address (localhost or 127.0.0.1).
+fn is_loopback(host: &str) -> bool {
+    host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 // ── Handlers: Authorize + Login (M4a) ───────────────────────────────────────
@@ -517,7 +567,10 @@ async fn handle_refresh_grant(
 
 // ── Handlers: Register (RFC 7591) ───────────────────────────────────────────
 
-/// `POST /oauth2/register` — dynamic client registration.
+/// `POST /oauth2/register` — dynamic client registration (RFC 7591).
+///
+/// Returns **201 Created** with the registered client metadata.
+/// Supports `token_endpoint_auth_method` = "none" (public client, PKCE-only).
 pub async fn register(
     State(state): State<AppState>,
     Json(body): Json<RegisterRequest>,
@@ -531,22 +584,38 @@ pub async fn register(
         .with_status(StatusCode::BAD_REQUEST)
         .into_response();
     }
+
+    // Determine auth method: "none" = public client (PKCE-only), else confidential.
+    let auth_method = body
+        .token_endpoint_auth_method
+        .as_deref()
+        .unwrap_or("client_secret_post");
+    let is_public = auth_method == "none";
+
     let client_id = uuid::Uuid::new_v4().to_string();
-    let client_secret = crate::auth_store::random_token(48);
+    let client_secret = if is_public {
+        String::new()
+    } else {
+        crate::auth_store::random_token(48)
+    };
+
+    // Default scope: "mcp offline_access" — matches what MCP clients
+    // (Claude, etc.) expect. offline_access enables refresh tokens.
     let scope_str = body
         .scope
         .clone()
-        .unwrap_or_else(|| "read write".to_string());
+        .unwrap_or_else(|| "mcp offline_access".to_string());
     let scopes = scope_str
         .split_whitespace()
         .map(|s| s.to_string())
         .collect();
+
     let client = match state.store.add_client(
         &client_id,
         &client_secret,
         redirect_uris,
         scopes,
-        false,
+        is_public,
         true,
     ) {
         Ok(c) => c,
@@ -565,20 +634,28 @@ pub async fn register(
         None,
         Some(&client.client_id),
         None,
-        "dynamic registration",
+        format!("dynamic registration, public={is_public}"),
     );
-    Json(serde_json::json!({
+
+    // RFC 7591 §3.2.1: client_id_issued_at = epoch seconds (int).
+    let issued_at = chrono::Utc::now().timestamp();
+
+    let mut resp = serde_json::json!({
         "client_id": client.client_id,
-        "client_secret": client_secret,
-        "client_id_issued_at": client.created_at,
+        "client_id_issued_at": issued_at,
         "client_secret_expires_at": 0,
         "redirect_uris": client.redirect_uris,
         "grant_types": client.grants,
         "response_types": ["code"],
-        "token_endpoint_auth_method": "client_secret_post",
+        "token_endpoint_auth_method": auth_method,
         "scope": scope_str,
-    }))
-    .into_response()
+    });
+    // Only include client_secret for confidential clients.
+    if !is_public {
+        resp["client_secret"] = serde_json::Value::String(client_secret);
+    }
+
+    (StatusCode::CREATED, Json(resp)).into_response()
 }
 
 // ── Handlers: Metadata (RFC 8414) + JWKS ────────────────────────────────────

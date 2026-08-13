@@ -512,12 +512,52 @@ async fn register_creates_client() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    // RFC 7591 §3.2.1: must return 201 Created.
+    assert_eq!(resp.status(), StatusCode::CREATED);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(json["client_id"].as_str().unwrap().len() > 10);
     assert!(json["client_secret"].as_str().unwrap().len() > 10);
     assert_eq!(json["redirect_uris"][0], "http://localhost/cb");
+    // client_id_issued_at must be a number (epoch seconds).
+    assert!(
+        json["client_id_issued_at"].is_number(),
+        "client_id_issued_at should be a number, got: {}",
+        json["client_id_issued_at"]
+    );
+    assert_eq!(json["client_secret_expires_at"], 0);
+    assert_eq!(json["token_endpoint_auth_method"], "client_secret_post");
+    assert_eq!(json["scope"], "read write");
+}
+
+#[tokio::test]
+async fn register_public_client_no_secret() {
+    let app = TestApp::new().await;
+    let body = r#"{"redirect_uris":["http://localhost:54321/cb"],"token_endpoint_auth_method":"none","scope":"mcp offline_access"}"#;
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/oauth2/register")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["client_id"].as_str().unwrap().len() > 10);
+    // Public client: no client_secret in response.
+    assert!(
+        json.get("client_secret").is_none() || json["client_secret"].as_str().is_none(),
+        "public client should not have client_secret"
+    );
+    assert_eq!(json["token_endpoint_auth_method"], "none");
+    assert_eq!(json["scope"], "mcp offline_access");
 }
 
 #[tokio::test]
