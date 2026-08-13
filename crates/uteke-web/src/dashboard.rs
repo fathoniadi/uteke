@@ -357,12 +357,9 @@ fn dashboard_spa() -> String {
       </table>
     </div>
     <div id="empty" class="text-center text-muted py-4" style="display:none;">No memories.</div>
-    <div class="card-footer d-flex justify-content-between align-items-center">
-      <div class="btn-group btn-group-sm">
-        <button class="btn btn-outline-secondary" id="prev" onclick="pagePrev()">‹ Prev</button>
-        <button class="btn btn-outline-secondary" id="next" onclick="pageNext()">Next ›</button>
-      </div>
-      <span class="text-muted small" id="page-info"></span>
+    <div class="card-footer d-flex justify-content-end align-items-center gap-2">
+      <span class="text-muted small me-2" id="page-info"></span>
+      <nav><ul class="pagination pagination-sm mb-0" id="pager"></ul></nav>
     </div>
   </div>
 </main>
@@ -607,9 +604,43 @@ function render(){
     }).join("");
   }
   const page = Math.floor(S.offset / LIMIT) + 1;
+  // Build Bootstrap pagination with page numbers.
+  // We only know "has_more" (next page exists), not total count, so we
+  // render a sliding window: show current page, ±2 neighbors, plus first/last
+  // if far away. Since total is unknown, we treat hasMore=false as the last page.
+  const pager = $("pager");
+  const canPrev = S.offset > 0;
+  const canNext = S.hasMore;
+  // Estimate total pages: if no hasMore, current page is the last.
+  // Otherwise we know there's at least one more page.
+  const totalPages = canNext ? page + 1 : page;
+  // Build page list: show up to 5 numbers around current.
+  let startP = Math.max(1, page - 2);
+  let endP = Math.min(totalPages, page + 2);
+  // Expand window if we're near the start.
+  if (endP - startP < 4 && totalPages > 5) { endP = Math.min(totalPages, startP + 4); }
+  if (endP - startP < 4 && startP > 1) { startP = Math.max(1, endP - 4); }
+  let html = "";
+  // Prev
+  html += `<li class="page-item ${canPrev ? "" : "disabled"}"><a class="page-link" href="#" onclick="pagePrev();return false;">&laquo;</a></li>`;
+  // First + ellipsis
+  if (startP > 1) {
+    html += `<li class="page-item"><a class="page-link" href="#" onclick="goToPage(1);return false;">1</a></li>`;
+    if (startP > 2) { html += `<li class="page-item disabled"><span class="page-link">&hellip;</span></li>`; }
+  }
+  // Page numbers
+  for (let p = startP; p <= endP; p++) {
+    html += `<li class="page-item ${p === page ? "active" : ""}"><a class="page-link" href="#" onclick="goToPage(${p});return false;">${p}</a></li>`;
+  }
+  // Ellipsis + last (only if we know there are more pages beyond endP)
+  if (canNext && endP < totalPages) {
+    if (endP < totalPages - 1) { html += `<li class="page-item disabled"><span class="page-link">&hellip;</span></li>`; }
+    html += `<li class="page-item"><a class="page-link" href="#" onclick="goToPage(${totalPages});return false;">${totalPages}</a></li>`;
+  }
+  // Next
+  html += `<li class="page-item ${canNext ? "" : "disabled"}"><a class="page-link" href="#" onclick="pageNext();return false;">&raquo;</a></li>`;
+  pager.innerHTML = html;
   $("page-info").textContent = `Page ${page}` + (S.hasMore ? " (more available)" : "");
-  $("prev").disabled = S.offset === 0;
-  $("next").disabled = !S.hasMore;
 }
 function typeColor(t){
   const map = { fact:"primary", procedure:"success", preference:"info", decision:"warning", context:"secondary", note:"light", insight:"danger", reference:"info", event:"dark" };
@@ -635,6 +666,7 @@ function filterTag(t){ $("tag").value = t; S.tag = t; S.offset = 0; load(); }
 function resetFilters(){ S={q:"",mode:"list",ns:"",tag:"",sort:"created:desc",offset:0,rows:[],hasMore:false}; $("q").value=""; $("mode").value="list"; $("ns").value=""; $("tag").value=""; $("sort").value="created:desc"; loadTags(); loadStats(); load(); }
 function pagePrev(){ if(S.offset>=LIMIT){ S.offset-=LIMIT; load(); } }
 function pageNext(){ if(S.hasMore){ S.offset+=LIMIT; load(); } }
+function goToPage(p){ const off = (p - 1) * LIMIT; if(off >= 0 && off !== S.offset){ S.offset = off; load(); } }
 
 // ── Detail ───────────────────────────────────────────────────────────────
 async function openDetail(id){
