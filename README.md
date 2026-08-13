@@ -298,6 +298,84 @@ Both expose the same HTTP API. Other agents and tools connect via `http://your-h
 
 ---
 
+## 🌐 Uteke Web — OAuth2 Gateway + Dashboard
+
+`uteke-web` adalah satu binary yang menggabungkan **OAuth2 auth server + reverse proxy + dashboard** untuk `uteke-server`. Ini penggabungan dari `uteke-oauth-proxy` dan `uteke-dashboard` jadi satu proses.
+
+### Kenapa butuh uteke-web
+
+`uteke-server` (memory server) nggak punya auth sendiri. `uteke-web` duduk di depannya buat:
+
+- **OAuth2 auth server** — issue & validasi access token
+- **Reverse proxy** — semua request ke `uteke-server` dilewatkan sini, token di-inject otomatis
+- **Dashboard** — web UI buat browse / search / manage memory
+
+### OAuth2 endpoints
+
+| Endpoint | Standar | Fungsi |
+|---|---|---|
+| `GET /oauth2/auth` | — | Login page (authorize) |
+| `POST /oauth2/token` | RFC 6749 | Issue token (authorization_code + PKCE, refresh_token rotation) |
+| `POST /oauth2/register` | RFC 7591 | Dynamic client registration |
+| `GET /.well-known/oauth-authorization-server` | RFC 8414 | OAuth2 metadata discovery |
+| `POST /oauth2/revoke` | RFC 7009 | Revoke token |
+| `POST /oauth2/introspect` | RFC 7662 | Token introspection |
+| `GET /profile` | — | Userinfo |
+| `GET /healthz` | — | Health check |
+
+### MCP OAuth2
+
+`uteke-web` bisa dipakai sebagai **OAuth2 authorization server buat MCP server**:
+
+- Dynamic client registration (RFC 7591) dengan default scope **`mcp offline_access`** — sengaja disetel buat MCP client (Claude Desktop, Cursor, dll.)
+- Metadata OAuth2 (RFC 8414) di `/.well-known/oauth-authorization-server`
+- PKCE (S256) wajib
+
+Jadi MCP client bisa authenticate ke uteke via OAuth2 → dapet access token → pakai token itu buat akses memory via MCP.
+
+### Konfigurasi
+
+`~/.codecora/uteke/uteke.toml` (section `[web]`):
+
+```toml
+[web]
+listen = "127.0.0.1:8768"           # bind address uteke-web
+issuer = "http://localhost:8768"    # base URL OAuth2 (harus reachable client)
+upstream = "http://127.0.0.1:8767"  # URL uteke-server
+upstream_token = ""                 # static Bearer token ke uteke-server
+jwt_secret = ""                     # generate: openssl rand -hex 32
+db_path = "~/.codecora/uteke/uteke-web.db"
+
+[web.dashboard]
+enabled = true
+session_ttl_hours = 24
+```
+
+Contoh lengkap: `examples/uteke-web.toml`.
+
+### CLI
+
+```bash
+uteke-web serve                                                        # jalanin server
+uteke-web credential add <client_id> <secret> --redirect-uri <url>    # register OAuth2 client
+uteke-web credential list                                              # list clients
+uteke-web user add <username> <password>                               # buat user dashboard
+```
+
+### Alur
+
+```
+MCP client / browser
+        │
+        ▼
+   uteke-web  (OAuth2 + proxy + dashboard)
+        │  inject Authorization: Bearer
+        ▼
+   uteke-server  (memory store)
+```
+
+---
+
 ## 🏗️ Architecture
 
 ```mermaid
