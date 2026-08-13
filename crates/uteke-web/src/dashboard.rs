@@ -58,6 +58,29 @@ pub fn dashboard_router() -> axum::Router<AppState> {
         )
         .route("/dashboard/api/stats", get(dashboard_api::handle_stats))
         .route("/dashboard/api/profile", get(dashboard_api::handle_profile))
+        // Documents (PLAN-docs.md) — wrap upstream `/doc/*`.
+        .route(
+            "/dashboard/api/documents",
+            get(dashboard_api::handle_list_documents).post(dashboard_api::handle_create_document),
+        )
+        .route(
+            "/dashboard/api/documents/search",
+            get(dashboard_api::handle_search_documents),
+        )
+        .route(
+            "/dashboard/api/documents/{slug}",
+            get(dashboard_api::handle_get_document)
+                .put(dashboard_api::handle_update_document)
+                .delete(dashboard_api::handle_delete_document),
+        )
+        .route(
+            "/dashboard/api/documents/{slug}/mem-refs",
+            get(dashboard_api::handle_document_mem_refs),
+        )
+        .route(
+            "/dashboard/api/documents/{slug}/move",
+            post(dashboard_api::handle_move_document),
+        )
 }
 
 // ── Dashboard index ─────────────────────────────────────────────────────────
@@ -260,6 +283,7 @@ fn dashboard_spa() -> String {
 <title>uteke — Dashboard</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/easymde@2.18.0/dist/easymde.min.css" rel="stylesheet">
 <style>
   body { background: #f1f5f9; }
   .stat-num { font-size: 1.35rem; font-weight: 700; line-height: 1.1; }
@@ -280,17 +304,39 @@ fn dashboard_spa() -> String {
   .chips input { border: none; outline: none; flex: 1; min-width: 120px; padding: 0.2rem; font-size: 0.85rem; background: transparent; }
   .toast-container { z-index: 1100; }
   .cursor-pointer { cursor: pointer; }
+  .nav-tab { color: #adb5bd; font-size: 0.85rem; }
+  .nav-tab.active { background: rgba(255,255,255,0.15); color: #fff; }
+  .doc-markdown { line-height: 1.6; }
+  .doc-markdown h1 { font-size: 1.5rem; margin-top: 1rem; }
+  .doc-markdown h2 { font-size: 1.3rem; margin-top: 0.8rem; }
+  .doc-markdown h3 { font-size: 1.15rem; margin-top: 0.6rem; }
+  .doc-markdown pre { background: #f1f5f9; padding: 0.75rem; border-radius: 0.375rem; overflow-x: auto; }
+  .doc-markdown code { background: #f1f5f9; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-size: 0.85rem; }
+  .doc-markdown pre code { background: none; padding: 0; }
+  .doc-markdown blockquote { border-left: 3px solid #cbd5e1; padding-left: 1rem; color: #64748b; }
+  .doc-markdown table { border-collapse: collapse; width: 100%; }
+  .doc-markdown th, .doc-markdown td { border: 1px solid #dee2e6; padding: 0.4rem 0.6rem; }
+  .doc-markdown th { background: #f1f5f9; }
+  .doc-tree-item { padding: 0.4rem 0.6rem; border-bottom: 1px solid #f1f5f9; }
+  .doc-tree-item:hover { background: #f8fafc; }
+  .doc-tree-children { margin-left: 1.5rem; border-left: 2px solid #e2e8f0; }
+  .EasyMDEContainer .editor-toolbar { border-radius: 0.375rem 0.375rem 0 0; }
 </style>
 </head>
 <body>
 <nav class="navbar navbar-dark bg-dark px-3 py-2">
   <span class="navbar-brand mb-0 h1">uteke Dashboard</span>
-  <div class="d-flex align-items-center gap-3">
+  <div class="d-flex align-items-center gap-3 ms-auto">
+    <ul class="nav nav-pills nav-fill" id="nav-tabs">
+      <li class="nav-item"><a class="nav-link nav-tab py-1 px-3" href="#/memories" data-page="memories">Memories</a></li>
+      <li class="nav-item"><a class="nav-link nav-tab py-1 px-3" href="#/documents" data-page="documents">Documents</a></li>
+    </ul>
     <span class="text-secondary small" id="user-label">—</span>
     <button class="btn btn-sm btn-outline-light" onclick="logout()"><i class="bi bi-box-arrow-right"></i> Logout</button>
   </div>
 </nav>
 
+<div id="page-memories">
 <main class="container-fluid py-3" style="max-width:1180px;">
   <!-- Stats -->
   <div class="row g-2 mb-3" id="stats"></div>
@@ -364,6 +410,138 @@ fn dashboard_spa() -> String {
     </div>
   </div>
 </main>
+</div><!-- /page-memories -->
+
+<!-- ── Documents page ─────────────────────────────────────────────────── -->
+<div id="page-docs" style="display:none;">
+  <!-- Docs list view -->
+  <div id="docs-list-view" class="container-fluid py-3" style="max-width:1180px;">
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="row g-2 align-items-end">
+          <div class="col-md-5">
+            <label class="form-label small text-muted mb-1">Search documents</label>
+            <input id="doc-q" class="form-control form-control-sm" placeholder="Hybrid search (semantic + keyword)…">
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label small text-muted mb-1">Mode</label>
+            <select id="doc-mode" class="form-select form-select-sm">
+              <option value="hybrid">Hybrid</option>
+              <option value="semantic">Semantic</option>
+              <option value="fts">Keyword</option>
+            </select>
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label small text-muted mb-1">Filter</label>
+            <select id="doc-filter" class="form-select form-select-sm">
+              <option value="all">All docs</option>
+              <option value="roots">Roots only</option>
+            </select>
+          </div>
+          <div class="col-12 d-flex gap-2">
+            <button class="btn btn-sm btn-outline-secondary" onclick="docResetFilters()"><i class="bi bi-arrow-counterclockwise"></i> Reset</button>
+            <button class="btn btn-sm btn-primary" onclick="docOpenCreate()"><i class="bi bi-plus-lg"></i> New document</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span class="small text-muted" id="doc-list-info">Documents</span>
+      </div>
+      <div class="list-group list-group-flush" id="doc-tree"></div>
+      <div id="doc-empty" class="text-center text-muted py-4" style="display:none;">No documents found.</div>
+    </div>
+  </div>
+
+  <!-- Docs detail view -->
+  <div id="docs-detail-view" class="container-fluid py-3" style="max-width:900px; display:none;">
+    <nav aria-label="breadcrumb" id="doc-breadcrumb" class="mb-3"></nav>
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h4 id="doc-detail-title" class="mb-0"></h4>
+      <div class="btn-group btn-group-sm">
+        <button class="btn btn-outline-secondary" onclick="docBackToList()"><i class="bi bi-arrow-left"></i> Back</button>
+        <button class="btn btn-outline-primary" onclick="docOpenEdit()"><i class="bi bi-pencil"></i> Edit</button>
+        <button class="btn btn-outline-warning" onclick="docOpenMove()"><i class="bi bi-diagram-3"></i> Move</button>
+        <button class="btn btn-outline-danger" onclick="docOpenDelete()"><i class="bi bi-trash"></i> Delete</button>
+      </div>
+    </div>
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="mb-2">
+          <span class="badge bg-secondary me-1" id="doc-detail-slug"></span>
+          <span class="badge bg-info text-white me-1" id="doc-detail-version"></span>
+          <span class="text-muted small" id="doc-detail-dates"></span>
+        </div>
+        <div id="doc-detail-tags" class="mb-2"></div>
+        <div id="doc-detail-content" class="doc-markdown"></div>
+      </div>
+    </div>
+    <div class="card" id="doc-memrefs-card" style="display:none;">
+      <div class="card-header small text-muted">Referenced by memories</div>
+      <div class="card-body" id="doc-memrefs-body"></div>
+    </div>
+  </div>
+</div><!-- /page-docs -->
+
+<!-- Document create/edit modal -->
+<div class="modal fade" id="m-doc-edit" tabindex="-1">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title" id="doc-edit-title">New document</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <div class="row g-3 mb-3">
+          <div class="col-md-6"><label class="form-label">Slug <span class="text-danger">*</span></label><input id="doc-edit-slug" class="form-control" placeholder="url-friendly-id"></div>
+          <div class="col-md-6"><label class="form-label">Title</label><input id="doc-edit-title-input" class="form-control" placeholder="Document title"></div>
+        </div>
+        <div class="mb-3"><label class="form-label">Tags</label><div class="chips" id="doc-edit-tags"></div></div>
+        <div class="mb-3">
+          <label class="form-label">Parent (slug)</label>
+          <input id="doc-edit-parent" class="form-control" list="doc-parent-list" placeholder="(root — leave empty for top-level)">
+          <datalist id="doc-parent-list"></datalist>
+        </div>
+        <div class="mb-3"><label class="form-label">Content (Markdown)</label><textarea id="doc-edit-content" class="form-control" rows="12"></textarea></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" onclick="docSubmitEdit()"><i class="bi bi-save"></i> Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Document move modal -->
+<div class="modal fade" id="m-doc-move" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Move document</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <p class="text-muted small">Move <strong id="doc-move-label"></strong> to a new parent.</p>
+        <label class="form-label">New parent (slug)</label>
+        <input id="doc-move-parent" class="form-control" list="doc-parent-list" placeholder="(root — leave empty for top-level)">
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" onclick="docConfirmMove()"><i class="bi bi-diagram-3"></i> Move</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Document delete confirm -->
+<div class="modal fade" id="m-doc-delete" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title text-danger"><i class="bi bi-exclamation-triangle"></i> Delete document?</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body"><p id="doc-del-msg" class="text-muted mb-0"></p></div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-danger" onclick="docConfirmDelete()"><i class="bi bi-trash"></i> Delete</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- Detail modal -->
 <div class="modal fade" id="m-detail" tabindex="-1">
@@ -448,6 +626,9 @@ fn dashboard_spa() -> String {
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/easymde@2.18.0/dist/easymde.min.js"></script>
 <script>
 const TYPES = ["fact","procedure","preference","decision","context","note","insight","reference","event"];
 const LIMIT = 20;
@@ -787,6 +968,276 @@ function init(){
   loadProfile(); loadNamespaces(); loadTags(); loadStats(); load();
 }
 init();
+
+// ── Documents (PLAN-docs.md D3–D5) ───────────────────────────────────────
+let D = { q:"", mode:"hybrid", filter:"all", rows:[], currentSlug:null, editSlug:null, easyMDE:null };
+let docModals = {};
+
+function initDocModals(){
+  ["m-doc-edit","m-doc-move","m-doc-delete"].forEach(id => { docModals[id] = new bootstrap.Modal(document.getElementById(id)); });
+}
+
+// ── Hash routing ──────────────────────────────────────────────────────────
+function showPage(name){
+  document.getElementById("page-memories").style.display = name === "memories" ? "" : "none";
+  document.getElementById("page-docs").style.display = name === "documents" ? "" : "none";
+  document.querySelectorAll(".nav-tab").forEach(t => t.classList.toggle("active", t.dataset.page === name));
+}
+function routeHash(){
+  const h = window.location.hash.slice(1); // remove #
+  if(h.startsWith("/documents/")){
+    const slug = decodeURIComponent(h.slice("/documents/".length));
+    showPage("documents");
+    docShowDetail(slug);
+  } else if(h.startsWith("/documents")){
+    showPage("documents");
+    docShowList();
+  } else {
+    showPage("memories");
+  }
+}
+window.addEventListener("hashchange", routeHash);
+
+// ── Docs: list ────────────────────────────────────────────────────────────
+async function docLoad(){
+  const params = new URLSearchParams();
+  if(D.q){ params.set("q", D.q); params.set("mode", D.mode); }
+  else { if(D.filter === "roots") params.set("roots_only", "true"); params.set("limit", "200"); }
+  try {
+    if(D.q){
+      const results = await apiGet("/dashboard/api/documents/search?"+params.toString());
+      D.rows = results.map(r => ({ ...r.document, _score:r.score, _snippet:r.chunk_snippet, _heading:r.chunk_heading }));
+    } else {
+      D.rows = await apiGet("/dashboard/api/documents?"+params.toString());
+    }
+    docRenderTree();
+  } catch(e){ toast("Doc load failed: "+e.message); }
+}
+function docRenderTree(){
+  const tree = document.getElementById("doc-tree");
+  const info = document.getElementById("doc-list-info");
+  if(!D.rows.length){ tree.innerHTML=""; document.getElementById("doc-empty").style.display="block"; info.textContent="No documents"; return; }
+  document.getElementById("doc-empty").style.display="none";
+  // Build tree by parent_id
+  const byParent = {};
+  D.rows.forEach(d => { const p = d.parent_id || "__root__"; (byParent[p] = byParent[p] || []).push(d); });
+  function renderLevel(parentId, depth){
+    const items = byParent[parentId] || [];
+    items.sort((a,b) => (a.sort_order||0) - (b.sort_order||0) || a.title.localeCompare(b.title));
+    return items.map(d => {
+      const indent = depth * 24;
+      const childIcon = d.has_children ? '<i class="bi bi-folder me-1"></i>' : '<i class="bi bi-file-earmark-text me-1"></i>';
+      const score = d._score != null ? ` <span class="badge bg-success bg-opacity-25 text-success small">${d._score.toFixed(2)}</span>` : "";
+      const snippet = d._snippet ? `<div class="small text-muted ms-3" style="max-width:600px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d._snippet)}</div>` : "";
+      return `<div class="doc-tree-item" style="padding-left:${indent+12}px">
+        <div class="d-flex justify-content-between align-items-start">
+          <span class="cursor-pointer" onclick="window.location.hash='#/documents/${encodeURIComponent(d.slug)}'">${childIcon}${esc(d.title||d.slug)}${score}</span>
+          <span class="text-muted small">${fmtDate(d.updated_at)}</span>
+        </div>${snippet}
+      </div>`;
+    }).join("");
+  }
+  tree.innerHTML = renderLevel("__root__", 0);
+  info.textContent = `${D.rows.length} document${D.rows.length !== 1 ? "s" : ""}`;
+}
+
+// ── Docs: detail ──────────────────────────────────────────────────────────
+async function docShowDetail(slug){
+  D.currentSlug = slug;
+  document.getElementById("docs-list-view").style.display = "none";
+  document.getElementById("docs-detail-view").style.display = "";
+  try {
+    const d = await apiGet("/dashboard/api/documents/"+encodeURIComponent(slug));
+    document.getElementById("doc-detail-title").textContent = d.title || d.slug;
+    document.getElementById("doc-detail-slug").textContent = d.slug;
+    document.getElementById("doc-detail-version").textContent = "v" + d.version;
+    document.getElementById("doc-detail-dates").textContent = "Updated " + fmtDate(d.updated_at) + " · Created " + fmtDate(d.created_at);
+    const tags = (d.tags||[]).map(t => `<span class="badge bg-info text-white me-1">${esc(t)}</span>`).join("");
+    document.getElementById("doc-detail-tags").innerHTML = tags || "";
+    // Render markdown with marked.js + sanitize with DOMPurify
+    const raw = marked.parse(d.content || "");
+    document.getElementById("doc-detail-content").innerHTML = DOMPurify.sanitize(raw);
+    // Load mem-refs (optional, non-fatal)
+    try {
+      const refs = await apiGet("/dashboard/api/documents/"+encodeURIComponent(slug)+"/mem-refs");
+      const ids = (refs && refs.memory_ids) || [];
+      if(ids.length){
+        document.getElementById("doc-memrefs-card").style.display = "";
+        document.getElementById("doc-memrefs-body").innerHTML = ids.map(id =>
+          `<span class="badge bg-secondary me-1 mb-1 id-mono">${esc(id.slice(0,8))}</span>`).join("");
+      } else {
+        document.getElementById("doc-memrefs-card").style.display = "none";
+      }
+    } catch(_){ document.getElementById("doc-memrefs-card").style.display = "none"; }
+  } catch(e){
+    toast("Failed to load document: "+e.message);
+    docBackToList();
+  }
+}
+function docBackToList(){
+  document.getElementById("docs-detail-view").style.display = "none";
+  document.getElementById("docs-list-view").style.display = "";
+  D.currentSlug = null;
+  if(window.location.hash !== "#/documents") window.location.hash = "#/documents";
+}
+
+// ── Docs: create/edit ─────────────────────────────────────────────────────
+async function docLoadParentOptions(){
+  try {
+    const docs = await apiGet("/dashboard/api/documents?limit=200");
+    const dl = document.getElementById("doc-parent-list");
+    dl.innerHTML = docs.map(d => `<option value="${esc(d.slug)}">${esc(d.title||d.slug)}</option>`).join("");
+  } catch(_){}
+}
+function docOpenCreate(){
+  D.editSlug = null;
+  document.getElementById("doc-edit-title").textContent = "New document";
+  document.getElementById("doc-edit-slug").value = "";
+  document.getElementById("doc-edit-slug").disabled = false;
+  document.getElementById("doc-edit-title-input").value = "";
+  document.getElementById("doc-edit-parent").value = "";
+  document.getElementById("doc-edit-content").value = "";
+  makeChips(document.getElementById("doc-edit-tags"), []);
+  docLoadParentOptions();
+  docModals["m-doc-edit"].show();
+  // Init EasyMDE after modal is visible
+  setTimeout(() => docInitMDE(), 200);
+}
+async function docOpenEdit(){
+  if(!D.currentSlug) return;
+  try {
+    const d = await apiGet("/dashboard/api/documents/"+encodeURIComponent(D.currentSlug));
+    D.editSlug = D.currentSlug;
+    document.getElementById("doc-edit-title").textContent = "Edit document";
+    document.getElementById("doc-edit-slug").value = d.slug;
+    document.getElementById("doc-edit-slug").disabled = true; // slug immutable on edit
+    document.getElementById("doc-edit-title-input").value = d.title || "";
+    document.getElementById("doc-edit-parent").value = ""; // parent changed via Move
+    document.getElementById("doc-edit-content").value = d.content || "";
+    makeChips(document.getElementById("doc-edit-tags"), d.tags || []);
+    docLoadParentOptions();
+    docModals["m-doc-edit"].show();
+    setTimeout(() => docInitMDE(), 200);
+  } catch(e){ toast("Failed: "+e.message); }
+}
+function docInitMDE(){
+  if(D.easyMDE){ D.easyMDE.toTextArea(); D.easyMDE = null; }
+  const el = document.getElementById("doc-edit-content");
+  D.easyMDE = new EasyMDE({
+    element: el,
+    spellChecker: false,
+    autofocus: false,
+    status: ["lines","words"],
+    toolbar: ["bold","italic","heading","|","quote","code","unordered-list","ordered-list","|","link","table","|","preview","side-by-side","fullscreen","|","guide"],
+  });
+}
+async function docSubmitEdit(){
+  const content = D.easyMDE ? D.easyMDE.value() : document.getElementById("doc-edit-content").value;
+  const tags = document.getElementById("doc-edit-tags")._get();
+  if(D.editSlug){
+    // Update
+    const body = { content, tags };
+    const title = document.getElementById("doc-edit-title-input").value.trim();
+    if(title) body.title = title;
+    try {
+      await apiMutate("/dashboard/api/documents/"+encodeURIComponent(D.editSlug),"PUT",body);
+      docModals["m-doc-edit"].hide();
+      toast("Document updated");
+      docShowDetail(D.editSlug);
+    } catch(e){ toast("Update failed: "+e.message); }
+  } else {
+    // Create
+    const slug = document.getElementById("doc-edit-slug").value.trim();
+    if(!slug){ toast("Slug required"); return; }
+    if(!content.trim()){ toast("Content required"); return; }
+    const body = { slug, content, tags };
+    const title = document.getElementById("doc-edit-title-input").value.trim();
+    if(title) body.title = title;
+    const parent = document.getElementById("doc-edit-parent").value.trim();
+    if(parent) body.parent = parent;
+    try {
+      await apiMutate("/dashboard/api/documents","POST",body);
+      docModals["m-doc-edit"].hide();
+      toast("Document created");
+      window.location.hash = "#/documents/"+encodeURIComponent(slug);
+    } catch(e){ toast("Create failed: "+e.message); }
+  }
+}
+
+// ── Docs: move ────────────────────────────────────────────────────────────
+function docOpenMove(){
+  if(!D.currentSlug) return;
+  document.getElementById("doc-move-label").textContent = D.currentSlug;
+  document.getElementById("doc-move-parent").value = "";
+  docLoadParentOptions();
+  docModals["m-doc-move"].show();
+}
+async function docConfirmMove(){
+  if(!D.currentSlug) return;
+  const parent = document.getElementById("doc-move-parent").value.trim();
+  const body = {};
+  if(parent) body.new_parent = parent;
+  try {
+    await apiMutate("/dashboard/api/documents/"+encodeURIComponent(D.currentSlug)+"/move","POST",body);
+    docModals["m-doc-move"].hide();
+    toast("Document moved");
+    docLoad();
+    docShowDetail(D.currentSlug);
+  } catch(e){ toast("Move failed: "+e.message); }
+}
+
+// ── Docs: delete ───────────────────────────────────────────────────────────
+function docOpenDelete(){
+  if(!D.currentSlug) return;
+  document.getElementById("doc-del-msg").textContent = `Delete "${D.currentSlug}"? This will cascade to all children and chunks.`;
+  docModals["m-doc-delete"].show();
+}
+async function docConfirmDelete(){
+  if(!D.currentSlug) return;
+  try {
+    const r = await apiMutate("/dashboard/api/documents/"+encodeURIComponent(D.currentSlug),"DELETE");
+    docModals["m-doc-delete"].hide();
+    const sub = r.subtree_size != null ? ` (${r.subtree_size} children cascaded)` : "";
+    toast("Deleted"+sub);
+    D.currentSlug = null;
+    window.location.hash = "#/documents";
+  } catch(e){ toast("Delete failed: "+e.message); }
+}
+
+// ── Docs: filters ─────────────────────────────────────────────────────────
+let docDebounceT = null;
+function onDocSearchInput(){
+  clearTimeout(docDebounceT);
+  docDebounceT = setTimeout(()=>{
+    D.q = document.getElementById("doc-q").value.trim();
+    docLoad();
+  }, 300);
+}
+function onDocModeChange(){ D.mode = document.getElementById("doc-mode").value; if(D.q) docLoad(); }
+function onDocFilterChange(){ D.filter = document.getElementById("doc-filter").value; if(!D.q) docLoad(); }
+function docResetFilters(){
+  D = { q:"", mode:"hybrid", filter:"all", rows:D.rows, currentSlug:D.currentSlug, editSlug:D.editSlug, easyMDE:D.easyMDE };
+  document.getElementById("doc-q").value = "";
+  document.getElementById("doc-mode").value = "hybrid";
+  document.getElementById("doc-filter").value = "all";
+  docLoad();
+}
+function docShowList(){
+  document.getElementById("docs-detail-view").style.display = "none";
+  document.getElementById("docs-list-view").style.display = "";
+  D.currentSlug = null;
+  docLoad();
+}
+
+// ── Init docs ─────────────────────────────────────────────────────────────
+function initDocs(){
+  initDocModals();
+  document.getElementById("doc-q").addEventListener("input", onDocSearchInput);
+  document.getElementById("doc-mode").addEventListener("change", onDocModeChange);
+  document.getElementById("doc-filter").addEventListener("change", onDocFilterChange);
+}
+initDocs();
+routeHash();
 </script>
 </body>
 </html>"##.to_string()

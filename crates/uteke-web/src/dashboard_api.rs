@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use uteke_core::DEFAULT_NAMESPACE;
 use uteke_core::memory::types::{Memory, SearchResult, StoreStats, TagInfo, UnifiedSearchResult};
+use uteke_core::{Document, DocumentSearchResult, DocumentSummary};
 
 use crate::auth_store::Session;
 use crate::state::AppState;
@@ -706,6 +707,512 @@ pub async fn handle_profile(State(state): State<AppState>, headers: HeaderMap) -
         Err(r) => return r,
     };
     Json(serde_json::json!({ "username": sess.username })).into_response()
+}
+
+// ── Documents (PLAN-docs.md) ────────────────────────────────────────────────
+//
+// Three typed response structs (Opsi A — locked Thoni 2026-08-13):
+//   DashboardDocumentSummary   — list & search document field (no content/tags)
+//   DashboardDocument          — get/create/update (full content + tags)
+//   DashboardDocumentSearchResult — search (summary + chunk info + score + mode)
+//
+// Upstream `/doc/*` endpoints are all POST (except delete). Browser never sees
+// the upstream shape — these handlers translate to clean `/dashboard/api/*`.
+
+/// Default document list limit.
+const DEFAULT_DOC_LIMIT: usize = 50;
+/// Hard cap on document list limit.
+const MAX_DOC_LIMIT: usize = 200;
+
+fn default_doc_limit() -> usize {
+    DEFAULT_DOC_LIMIT
+}
+
+/// Normalized document summary for list & search results.
+/// Wraps `uteke_core::DocumentSummary` — no content/tags (upstream `/doc/list`
+/// and `/doc/search` return summaries, not full documents).
+#[derive(Debug, Clone, Serialize)]
+pub struct DashboardDocumentSummary {
+    pub id: String,
+    pub slug: String,
+    pub title: String,
+    /// Parent document UUID (None = root).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// Depth in tree (0 = root).
+    pub depth: i64,
+    /// Whether this document has children.
+    pub has_children: bool,
+    /// Manual ordering within siblings.
+    pub sort_order: i64,
+    pub updated_at: String,
+}
+
+impl From<DocumentSummary> for DashboardDocumentSummary {
+    fn from(s: DocumentSummary) -> Self {
+        Self {
+            id: s.id,
+            slug: s.slug,
+            title: s.title,
+            parent_id: s.parent_id,
+            depth: s.depth,
+            has_children: s.has_children,
+            sort_order: s.sort_order,
+            updated_at: s.updated_at,
+        }
+    }
+}
+
+/// Full document for get/create/update.
+/// Wraps `uteke_core::Document` — includes content, tags, and all metadata.
+#[derive(Debug, Clone, Serialize)]
+pub struct DashboardDocument {
+    pub id: String,
+    pub slug: String,
+    pub title: String,
+    pub content: String,
+    pub tags: Vec<String>,
+    /// Parent document UUID (None = root).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// Depth in tree (0 = root).
+    pub depth: i64,
+    /// Whether this document has children.
+    pub has_children: bool,
+    /// Manual ordering within siblings.
+    pub sort_order: i64,
+    /// Version number (incremented on each edit).
+    pub version: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl From<Document> for DashboardDocument {
+    fn from(d: Document) -> Self {
+        Self {
+            id: d.id,
+            slug: d.slug,
+            title: d.title,
+            content: d.content,
+            tags: d.tags,
+            parent_id: d.parent_id,
+            depth: d.depth,
+            has_children: d.has_children,
+            sort_order: d.sort_order,
+            version: d.version,
+            created_at: d.created_at,
+            updated_at: d.updated_at,
+        }
+    }
+}
+
+/// Search result for documents — summary + chunk info + score.
+/// Wraps `uteke_core::DocumentSearchResult`.
+#[derive(Debug, Clone, Serialize)]
+pub struct DashboardDocumentSearchResult {
+    #[serde(flatten)]
+    pub document: DashboardDocumentSummary,
+    pub chunk_heading: String,
+    pub chunk_snippet: String,
+    pub score: f32,
+    pub mode: String,
+}
+
+impl From<DocumentSearchResult> for DashboardDocumentSearchResult {
+    fn from(r: DocumentSearchResult) -> Self {
+        let summary = DashboardDocumentSummary::from(r.document);
+        Self {
+            document: summary,
+            chunk_heading: r.chunk_heading,
+            chunk_snippet: r.chunk_snippet,
+            score: r.score,
+            mode: r.mode,
+        }
+    }
+}
+
+/// `GET /dashboard/api/documents` query params.
+#[derive(Debug, Deserialize)]
+pub struct DocumentListQuery {
+    #[serde(default)]
+    pub roots_only: bool,
+    /// Parent slug to list children of.
+    #[serde(default)]
+    pub parent: Option<String>,
+    #[serde(default = "default_doc_limit")]
+    pub limit: usize,
+}
+
+/// `GET /dashboard/api/documents/search` query params.
+#[derive(Debug, Deserialize)]
+pub struct DocumentSearchQuery {
+    pub q: String,
+    /// "hybrid" | "semantic" | "fts" (default: hybrid).
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default = "default_doc_limit")]
+    pub limit: usize,
+}
+
+/// `POST /dashboard/api/documents` body.
+#[derive(Debug, Deserialize)]
+pub struct CreateDocumentRequest {
+    pub slug: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    pub content: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Parent slug (None = root).
+    #[serde(default)]
+    pub parent: Option<String>,
+}
+
+/// `PUT /dashboard/api/documents/{slug}` body — partial update.
+#[derive(Debug, Deserialize)]
+pub struct UpdateDocumentRequest {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+}
+
+/// `POST /dashboard/api/documents/{slug}/move` body.
+#[derive(Debug, Deserialize)]
+pub struct MoveDocumentRequest {
+    /// New parent slug (None = move to root).
+    #[serde(default)]
+    pub new_parent: Option<String>,
+}
+
+// ── Document handlers ───────────────────────────────────────────────────────
+
+/// `GET /dashboard/api/documents` — list documents (tree/roots/children).
+/// Wraps upstream `POST /doc/list`.
+pub async fn handle_list_documents(
+    State(state): State<AppState>,
+    Query(q): Query<DocumentListQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let client = UtekeClient::new(&state);
+    let limit = q.limit.clamp(1, MAX_DOC_LIMIT);
+    let body = serde_json::json!({
+        "limit": limit,
+        "roots_only": q.roots_only,
+        "parent": q.parent,
+    });
+    let resp = match client.post("/doc/list", &body).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let docs: Vec<DocumentSummary> = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let rows: Vec<DashboardDocumentSummary> = docs
+        .into_iter()
+        .map(DashboardDocumentSummary::from)
+        .collect();
+    Json(rows).into_response()
+}
+
+/// `GET /dashboard/api/documents/search` — hybrid/semantic/fts search.
+/// Wraps upstream `POST /doc/search`. Read-only (GET, no CSRF).
+pub async fn handle_search_documents(
+    State(state): State<AppState>,
+    Query(q): Query<DocumentSearchQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let query = q.q.trim().to_string();
+    if query.is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "query (q) must not be empty");
+    }
+    let mode = q.mode.as_deref().unwrap_or("hybrid").to_string();
+    let limit = q.limit.clamp(1, MAX_DOC_LIMIT);
+    let client = UtekeClient::new(&state);
+    let body = serde_json::json!({
+        "query": query,
+        "limit": limit,
+        "mode": mode,
+    });
+    let resp = match client.post("/doc/search", &body).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let results: Vec<DocumentSearchResult> = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let rows: Vec<DashboardDocumentSearchResult> = results
+        .into_iter()
+        .map(DashboardDocumentSearchResult::from)
+        .collect();
+    Json(rows).into_response()
+}
+
+/// Fetch a single document by slug and convert to DashboardDocument.
+/// Returns 404 if upstream returns null (slug not found).
+async fn fetch_document(
+    client: &UtekeClient<'_>,
+    slug: &str,
+) -> Result<DashboardDocument, Response> {
+    let body = serde_json::json!({ "slug": slug });
+    let resp = client.post("/doc/get", &body).await.map_err(upstream_err)?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        let code =
+            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err(api_error(code, &body_text));
+    }
+    let doc: Option<Document> = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            return Err(api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("upstream decode error: {e}"),
+            ));
+        }
+    };
+    doc.map(DashboardDocument::from)
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "document not found"))
+}
+
+/// `GET /dashboard/api/documents/{slug}` — detail (full document).
+/// Wraps upstream `POST /doc/get`. Maps null → 404.
+pub async fn handle_get_document(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let client = UtekeClient::new(&state);
+    match fetch_document(&client, &slug).await {
+        Ok(d) => Json(d).into_response(),
+        Err(r) => r,
+    }
+}
+
+/// `GET /dashboard/api/documents/{slug}/mem-refs` — memories referencing a doc.
+/// Wraps upstream `POST /doc/mem-refs` (note: upstream field is `doc_slug`).
+pub async fn handle_document_mem_refs(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let client = UtekeClient::new(&state);
+    let body = serde_json::json!({ "doc_slug": slug });
+    let resp = match client.post("/doc/mem-refs", &body).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+/// `POST /dashboard/api/documents` — create document.
+/// Wraps upstream `POST /doc/create`. Requires session + CSRF.
+pub async fn handle_create_document(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let req: CreateDocumentRequest = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return api_error(StatusCode::BAD_REQUEST, &format!("invalid body: {e}")),
+    };
+    if req.slug.trim().is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "slug must not be empty");
+    }
+    if req.content.trim().is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "content must not be empty");
+    }
+    let client = UtekeClient::new(&state);
+    let payload = serde_json::json!({
+        "slug": req.slug,
+        "title": req.title,
+        "content": req.content,
+        "tags": req.tags,
+        "parent": req.parent,
+    });
+    let resp = match client.post("/doc/create", &payload).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let created: Document = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(DashboardDocument::from(created)).into_response()
+}
+
+/// `PUT /dashboard/api/documents/{slug}` — partial update.
+/// Wraps upstream `POST /doc/update`. Maps null → 404. Requires session + CSRF.
+pub async fn handle_update_document(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let req: UpdateDocumentRequest = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return api_error(StatusCode::BAD_REQUEST, &format!("invalid body: {e}")),
+    };
+    let client = UtekeClient::new(&state);
+    let mut payload = serde_json::json!({ "slug": slug });
+    if let Some(t) = req.title {
+        payload["title"] = serde_json::json!(t);
+    }
+    if let Some(c) = req.content {
+        payload["content"] = serde_json::json!(c);
+    }
+    if let Some(t) = req.tags {
+        payload["tags"] = serde_json::json!(t);
+    }
+    let resp = match client.post("/doc/update", &payload).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        let code =
+            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        return api_error(code, &body_text);
+    }
+    let doc: Option<Document> = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("upstream decode error: {e}"),
+            );
+        }
+    };
+    match doc {
+        Some(d) => Json(DashboardDocument::from(d)).into_response(),
+        None => api_error(StatusCode::NOT_FOUND, "document not found"),
+    }
+}
+
+/// `DELETE /dashboard/api/documents/{slug}` — delete + cascade.
+/// Wraps upstream `DELETE /doc/delete?id=`. Requires session + CSRF.
+pub async fn handle_delete_document(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let client = UtekeClient::new(&state);
+    let path = format!("/doc/delete?id={}", urlencoding::encode(&slug));
+    let resp = match client.delete(&path).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+/// `POST /dashboard/api/documents/{slug}/move` — move to new parent.
+/// Wraps upstream `POST /doc/move`. Requires session + CSRF.
+pub async fn handle_move_document(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let req: MoveDocumentRequest = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return api_error(StatusCode::BAD_REQUEST, &format!("invalid body: {e}")),
+    };
+    let client = UtekeClient::new(&state);
+    let payload = serde_json::json!({
+        "slug": slug,
+        "new_parent": req.new_parent,
+    });
+    let resp = match client.post("/doc/move", &payload).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
