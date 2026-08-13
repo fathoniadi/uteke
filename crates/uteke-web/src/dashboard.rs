@@ -340,9 +340,14 @@ fn dashboard_spa() -> String {
   .doc-markdown table { border-collapse: collapse; width: 100%; }
   .doc-markdown th, .doc-markdown td { border: 1px solid #dee2e6; padding: 0.4rem 0.6rem; }
   .doc-markdown th { background: #f1f5f9; }
-  .doc-tree-item { padding: 0.4rem 0.6rem; border-bottom: 1px solid #f1f5f9; }
+  .doc-tree-item { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f1f5f9; position: relative; }
   .doc-tree-item:hover { background: #f8fafc; }
   .doc-tree-children { margin-left: 1.5rem; border-left: 2px solid #e2e8f0; }
+  .doc-row-id { font-family: ui-monospace, monospace; font-size: 0.72rem; color: #94a3b8; }
+  .doc-row-slug { font-size: 0.78rem; color: #64748b; }
+  .doc-row-title { font-size: 0.95rem; font-weight: 500; color: #1e293b; cursor: pointer; }
+  .doc-row-title:hover { color: #2563eb; }
+  .doc-row-actions { white-space: nowrap; }
   .EasyMDEContainer .editor-toolbar { border-radius: 0.375rem 0.375rem 0 0; }
 </style>
 </head>
@@ -1084,12 +1089,25 @@ function docRenderTree(){
       const indent = depth * 24;
       const childIcon = d.has_children ? '<i class="bi bi-folder me-1"></i>' : '<i class="bi bi-file-earmark-text me-1"></i>';
       const score = d._score != null ? ` <span class="badge bg-success bg-opacity-25 text-success small">${d._score.toFixed(2)}</span>` : "";
-      const snippet = d._snippet ? `<div class="small text-muted ms-3" style="max-width:600px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d._snippet)}</div>` : "";
-      return `<div class="doc-tree-item" style="padding-left:${indent+12}px">
-        <div class="d-flex justify-content-between align-items-start">
-          <span class="cursor-pointer" onclick="window.location.hash='#/documents/${encodeURIComponent(d.slug)}'">${childIcon}${esc(d.title||d.slug)}${score}</span>
-          <span class="text-muted small">${fmtDate(d.updated_at)}</span>
-        </div>${snippet}
+      const snippet = d._snippet ? `<div class="small text-muted mt-1" style="max-width:600px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d._snippet)}</div>` : "";
+      const slug = d.slug || "";
+      const title = d.title || d.slug || "";
+      const version = d.version != null ? d.version : 0;
+      const go = `window.location.hash='#/documents/${encodeURIComponent(slug)}'`;
+      const act = (fn) => `event.stopPropagation(); D.currentSlug='${esc(slug)}'; ${fn}`;
+      return `<div class="doc-tree-item" style="padding-left:${indent+12}px" onclick="${go}">
+        <div class="d-flex justify-content-between align-items-start gap-2">
+          <div class="flex-grow-1 min-w-0">
+            <div class="doc-row-id">${esc(shortId(d.id))}</div>
+            <div class="doc-row-slug">${esc(slug)} <span class="badge bg-secondary ms-1">v${version}</span>${score}</div>
+            <div class="doc-row-title">${childIcon}${esc(title)}</div>${snippet}
+          </div>
+          <div class="doc-row-actions d-flex gap-1 pt-1">
+            <button class="btn btn-sm btn-outline-primary py-0 px-1" title="Edit" onclick="${act('docOpenEdit()')}"><i class="bi bi-pencil"></i></button>
+            <button class="btn btn-sm btn-outline-warning py-0 px-1" title="Move" onclick="${act('docOpenMove()')}"><i class="bi bi-diagram-3"></i></button>
+            <button class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete" onclick="${act('docOpenDelete()')}"><i class="bi bi-trash"></i></button>
+          </div>
+        </div>
       </div>`;
     }).join("");
   }
