@@ -5,6 +5,7 @@ members = [
     "crates/uteke-cli",
     "crates/uteke-server",
     "crates/uteke-mcp",
+    "crates/uteke-web",
     "crates/docgen",
 ]
 

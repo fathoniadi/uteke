@@ -1,0 +1,124 @@
+# uteke.toml — contoh lengkap dengan section [web] untuk uteke-web
+#
+# Layered resolution:
+#   1. Built-in defaults
+#   2. ~/.codecora/uteke/uteke.toml (global)
+#   3. .uteke/uteke.toml (project, CWD)
+#   4. Environment variables (highest priority)
+#
+# Hanya keys yang eksplisit ditulis yang override. Field-level merge.
+
+# ─── Section uteke-core (memory store) ───────────────────────────────────────
+
+[store]
+path = "~/.codecora/uteke"
+namespace = "default"
+
+[logging]
+level = "warn"
+# file = ""
+
+# ─── Section uteke-server ────────────────────────────────────────────────────
+
+[server]
+enabled = false
+host = "127.0.0.1"
+port = 8767
+
+# ─── Section uteke-web ───────────────────────────────────────────────────────
+# uteke-web membaca section [web] dari uteke.toml yang sama.
+# Binary: uteke-web (subcommand: serve | credential | user)
+
+[web]
+# Bind address untuk uteke-web
+listen = "127.0.0.1:8768"
+
+# Issuer URL — base URL untuk OAuth2 endpoints (harus reachable dari client)
+issuer = "http://localhost:8768"
+
+# URL uteke-server yang di-proxy (reverse proxy target)
+upstream = "http://127.0.0.1:8767"
+
+# Token statis untuk autentikasi ke uteke-server.
+# Harus match dengan --auth-token / UTEKE_AUTH_TOKEN yang dipakai uteke-server.
+# Env: UTEKE_WEB_UPSTREAM_TOKEN
+upstream_token = ""
+
+# JWT signing secret (HS256). Generate dengan: openssl rand -hex 32
+# Env: UTEKE_WEB_JWT_SECRET
+jwt_secret = ""
+
+# Path SQLite DB untuk auth store (users, clients, tokens, sessions)
+db_path = "~/.codecora/uteke/uteke-web.db"
+
+# Audit trail JSONL path (default ON)
+audit_log_path = "~/.codecora/uteke/uteke-web-audit.jsonl"
+
+# Daily-rotated log files. Empty = stdout only.
+# Files: uteke-web.log.YYYY-MM-DD (rotated at midnight local time).
+# Old files are NOT auto-deleted — use logrotate or similar.
+# Env: UTEKE_WEB_LOG_DIR
+log_dir = "~/.codecora/uteke/logs"
+
+# Log level: "error", "warn", "info", "debug", "trace"
+# Env: UTEKE_WEB_LOG_LEVEL
+log_level = "info"
+
+# Extra headers injected into every upstream (uteke-server) request,
+# in addition to the static Authorization: Bearer <upstream_token>.
+# Repeatable as [[web.upstream_headers]].
+# [[web.upstream_headers]]
+# name = "X-Internal-Source"
+# value = "uteke-web"
+
+[web.dashboard]
+# Enable dashboard web UI
+enabled = true
+
+# Session TTL dalam jam
+session_ttl_hours = 24
+
+[web.tls]
+# Opsional: untuk deployment standalone tanpa reverse proxy TLS
+# cert = "/path/to/cert.pem"
+# key = "/path/to/key.pem"
+
+# ─── Section embedding (dipakai uteke-core) ──────────────────────────────────
+
+[embedding]
+backend = "onnx"
+model = "embeddinggemma-q4"
+max_seq_length = 2048
+# api_key = ""
+# base_url = ""
+# endpoint_path = ""
+# dims = 0
+
+# ─── Section recall ──────────────────────────────────────────────────────────
+
+[recall]
+min_score = 0.3
+min_score_strict = 0.5
+default_strategy = "vector"
+# graph_density_weight = 0.1
+# graph_authority_weight = 0.1
+# graph_rerank_enabled = true
+# salience_weight = 0.15
+# recency_weight = 0.15
+# jaccard_weight = 0.0
+
+# ─── Section lifecycle ───────────────────────────────────────────────────────
+
+[lifecycle]
+soft_delete_only = true
+auto_aging_enabled = true
+auto_aging_interval_hours = 168
+min_age_days = 90
+max_access_count = 3
+max_deprecate_percent = 1.0
+min_deprecate_per_cycle = 1
+max_deprecate_per_cycle = 50
+deprecated_ttl_days = 30
+auto_prune_enabled = true
+dream_dedup_soft_delete = true
+dream_compact_soft_delete = true

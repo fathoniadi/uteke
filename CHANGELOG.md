@@ -1,3 +1,18 @@
+## [Unreleased]
+
+### Added
+
+- **uteke-web crate — OAuth2 auth server + reverse proxy + dashboard** — New workspace crate (`crates/uteke-web`) providing a single axum binary with three roles in one process:
+  - **OAuth2 auth server**: authorization code + PKCE (S256), refresh token rotation, dynamic client registration (RFC 7591), metadata (RFC 8414), token revocation (RFC 7009), token introspection (RFC 7662), JWKS placeholder (HS256 → empty keys, migration path to RS256).
+  - **Reverse proxy**: JWT validation middleware (scope enforcement: read/write/admin) → inject static upstream token → forward to uteke-server. CORS passthrough (strip upstream CORS headers), 502/504 error handling, 30s timeout.
+  - **Dashboard web UI**: SPA shell, OAuth2 callback flow, server-side session store (SQLite), HMAC-signed session cookies, session ID rotation, double-submit CSRF protection, `/dashboard/api/*` JSON proxy.
+  - **CLI**: `uteke-web serve`, `uteke-web credential add/delete/list`, `uteke-web user add/delete/list/change-password/unlock`.
+  - **Security**: bcrypt for user/client secrets, SHA-256 hashing for auth codes & refresh tokens, IP rate limiting (5/min) + account lockout (10 failures), audit trail JSONL (always ON), Prometheus metrics (`/metrics`), graceful shutdown, upstream health check (`/healthz`).
+  - **Config**: reads `[web]` section from the same `uteke.toml` with layered resolution + env var overrides (`UTEKE_WEB_JWT_SECRET`, `UTEKE_WEB_UPSTREAM_TOKEN`).
+  - 32 unit tests covering auth store, JWT, PKCE, session cookies, config, audit log.
+
+---
+
 ## [0.13.2] — 2026-08-11
 
 Patch release with update notifications, a startup crash fix, and benchmark accuracy improvements. No breaking changes.

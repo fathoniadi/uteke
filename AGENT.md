@@ -21,6 +21,7 @@
 | `uteke-cli` | `crates/uteke-cli/` | CLI binary — clap commands, JSON output, server proxy |
 | `uteke-server` | `crates/uteke-server/` | HTTP server — persistent daemon for fast agent access |
 | `uteke-mcp` | `crates/uteke-mcp/` | MCP server — JSON-RPC for AI tool integration |
+| `uteke-web` | `crates/uteke-web/` | OAuth2 auth server + reverse proxy + dashboard (axum) |
 
 ### Module Structure
 
@@ -70,6 +71,22 @@ crates/uteke-cli/src/
 
 crates/uteke-server/src/
 └── main.rs             # Actix-web server
+
+crates/uteke-web/src/
+├── main.rs             # Entry point — CLI dispatch (serve/credential/user)
+├── cli.rs              # Clap structs (Cli, Commands, CredentialAction, UserAction)
+├── config.rs           # [web] section loading from uteke.toml (layered + env vars)
+├── app.rs              # Axum router builder (route priority: specific → catch-all proxy)
+├── state.rs            # AppState (config, auth store, audit log, reqwest client)
+├── auth_store.rs       # SQLite auth store (clients, users, codes, tokens, sessions)
+├── oauth.rs            # OAuth2 handlers (authorize, login, token, register, metadata, etc.)
+├── proxy.rs            # Reverse proxy (JWT validation + static token injection)
+├── dashboard.rs        # Dashboard SPA + callback + session cookie + CSRF + API proxy
+├── jwt.rs              # HS256 access token mint/verify (jsonwebtoken)
+├── pkce.rs             # PKCE S256 challenge verification
+├── session.rs          # HMAC-signed session cookie helpers
+├── audit.rs            # Audit trail JSONL logger (always ON)
+└── metrics.rs          # Prometheus counters (/metrics)
 ```
 
 ### Key Components
@@ -85,6 +102,8 @@ crates/uteke-server/src/
 | Server | actix-web | CORS enabled, ~42ms warm recall |
 | MCP | JSON-RPC over stdin/stdout | 5 tools: remember, recall, list, forget, stats |
 | Embedder Trait | `Box<dyn Embedder>` | Pluggable: ONNX (default), future: OpenAI, Ollama |
+| Web Auth | axum + jsonwebtoken (HS256) | OAuth2 server + reverse proxy + dashboard (`uteke-web`) |
+| Web Auth Store | SQLite (rusqlite) | `uteke-web.db` — clients, users, codes, tokens, sessions |
 
 ### Schema Versioning
 

@@ -16,3 +16,10 @@ uteke_index.usearch
 progress.md
 .cora/
 scripts/demo-record.sh
+
+# Coverage artifacts (cargo-llvm-cov / tarpaulin)
+*.profraw
+*.profdata
+lcov.info
+cobertura.xml
+coverage/
