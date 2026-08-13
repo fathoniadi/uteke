@@ -346,7 +346,7 @@ async function recall() {
   if (!q) return;
   const res = await fetch('/dashboard/api/recall', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': getCSRF()},
     body: JSON.stringify({ query: q, limit: 10 })
   });
   const data = await res.json();
