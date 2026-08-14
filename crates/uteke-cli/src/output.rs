@@ -83,7 +83,8 @@ pub(crate) fn print_unified_human(results: &[uteke_core::UnifiedSearchResult]) {
                     println!("     Type: {}", mt);
                 }
                 if let Some(src) = &r.source {
-                    println!("     Source: {}", src);
+                    let st = r.source_type.as_deref().unwrap_or("user");
+                    println!("     Source: {src} ({st})");
                 }
                 if let Some(imp) = r.importance {
                     println!("     Importance: {:.2}", imp);
@@ -178,7 +179,6 @@ pub(crate) fn print_stats_human(stats: &uteke_core::StoreStats) {
     println!("  🟡 Warm (30d):  {}", stats.warm);
     println!("  ❄️  Cold (>30d):  {}", stats.cold);
     println!("  Unique tags:    {}", stats.unique_tags);
-    println!("  Documents:      {}", stats.total_documents);
     let size_str = if stats.db_size_bytes < 1024 {
         format!("{} B", stats.db_size_bytes)
     } else if stats.db_size_bytes < 1024 * 1024 {

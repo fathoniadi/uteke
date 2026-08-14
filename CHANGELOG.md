@@ -1,60 +1,32 @@
-## [Unreleased]
+## [0.14.0] — 2026-08-14
+
+Minor release: hybrid recall as default strategy, scene-segmented extraction, memory tools guide, lifecycle introspection, and source provenance. One behavior change (recall default).
+
+### ⚠️ Behavior Change
+
+- **Hybrid (RRF) is now the default recall strategy (#1005)** — Previously defaulted to vector-only. Hybrid combines vector similarity with FTS5 keyword matching via Reciprocal Rank Fusion, improving recall@5 from 85.4% to 98.0% on the internal benchmark. No action needed — existing setups automatically benefit. To revert to vector-only, set `strategy = "vector"` in `[recall]`.
 
 ### Added
 
-- **uteke-web dashboard: Settings page** — Full credentials & session management UI in the dashboard. Four tabs: OAuth2 Clients, Users, Sessions, OAuth2 Tokens.
-  - **OAuth2 Clients tab** — list all registered clients (client_id, redirect URIs, public flag, created date). Add client modal (client_id, secret, redirect URI, public checkbox). Delete client with confirm. Wraps `AuthStore::list_clients`, `add_client`, `delete_client` — no upstream call needed.
-  - **Users tab** — list all dashboard users (username, status badge, failed attempts, created date). Add user modal (username, password). Change password modal. Unlock locked user button. Delete user with confirm (prevents self-deletion). Wraps `AuthStore::list_users`, `add_user`, `delete_user`, `change_password`, `unlock_user`.
-  - **Sessions tab** — list all active sessions (username, session ID prefix, created, expires). Revoke session button (prevents self-revocation — use logout instead). Wraps new `AuthStore::list_sessions` + `delete_session`.
-  - **OAuth2 Tokens tab** — list all active OAuth2 refresh tokens (client_id, username, scope, token hash prefix, created, expires). Revoke token button — forces AI agents (MCP clients) to re-authenticate after their current access token expires. Wraps new `AuthStore::list_refresh_tokens` + `revoke_refresh_token_by_hash`.
-  - **New API endpoints** (12 routes under `/dashboard/api/settings/*`): `GET/POST /settings/clients`, `DELETE /settings/clients/{id}`, `GET/POST /settings/users`, `DELETE /settings/users/{id}`, `PUT /settings/users/{id}/password`, `POST /settings/users/{id}/unlock`, `GET /settings/sessions`, `DELETE /settings/sessions/{id}`, `GET /settings/tokens`, `DELETE /settings/tokens/{hash}`. All require session; mutations require CSRF.
-  - **New AuthStore methods**: `list_sessions()` — returns all non-expired sessions, ordered by created_at DESC; `list_refresh_tokens()` — returns all active (not used, not expired) refresh tokens; `revoke_refresh_token_by_hash(hash)` — revokes a refresh token by its SHA-256 hash (for admin revocation without the plaintext token).
-  - **Tests**: 25 integration tests in `tests/settings_api.rs` — auth gating, CSRF, happy path for all 12 endpoints, input validation, self-deletion prevention, self-revocation prevention, duplicate user rejection, token revocation.
+- **Scene-segmented LLM extraction with priority scoring (#1009)** — When using `--extract` with an LLM, facts are now grouped by topic (scene) and assigned a priority score (0.0–1.0). Each fact gets a `scene:<topic>` tag for filtering, a semantic type (`decision`, `fact`, `preference`), and an importance value reflecting its priority. Offline extraction is unaffected. Backward compatible — flat string arrays from older models still parse correctly.
 
-- **uteke-web dashboard: Tier 1 API wrappers + UI** — 13 new dashboard API endpoints wrapping uteke-server features that were previously only accessible via CLI/MCP. All require session; mutations require CSRF.
-  - **Room summary** (`GET /dashboard/api/rooms/{id}/summary`) — topic clusters, participants, time range, top tags, recent decisions, pinned highlights. Rendered as a card in room detail view.
-  - **Room summary document** (`GET /dashboard/api/rooms/{id}/summary-document`) — structured meeting minutes grouped by memory type (Pinned, Decisions, Facts, Procedures, etc.). Rendered as a card in room detail view.
-  - **Room recall** (`GET /dashboard/api/rooms/{id}/recall?q=...`) — semantic search within a room. Search box added to room detail view; empty query falls back to chronological.
-  - **Memory feedback** (`POST /dashboard/api/memories/{id}/feedback`) — helpful/unhelpful buttons in memory detail modal; adjusts importance (+0.05 / -0.10) via trust scoring.
-  - **Memory graph** (`GET /dashboard/api/memories/{id}/graph`) — full knowledge graph visualization with vis.js (new "Graph" nav page). Shows all nodes + edges with physics-based layout, hover tooltips, and stats (node/edge/relation counts).
-  - **Memory edges** (`POST/DELETE /dashboard/api/memories/{id}/edges`) — add/remove graph edges from the dashboard.
-  - **Memory timeline** (`GET /dashboard/api/memories/{id}/timeline`) — event history (created, updated, recalled, consolidated, tagged, forgot) in memory detail modal.
-  - **Tag rename** (`POST /dashboard/api/tags/rename`) — rename a tag across all memories. Dropdown menu in tag filter with rename modal.
-  - **Tag delete** (`DELETE /dashboard/api/tags/{tag}`) — delete a tag from all memories (RESTful DELETE → POST translator). Confirm modal with tag name.
-  - **Export** (`GET /dashboard/api/export`) — download all memories as JSONL. Export button in stats bar; returns `application/x-ndjson` with Content-Disposition attachment header.
-  - **Import** (`POST /dashboard/api/import`) — import memories from JSONL file upload. Import button in stats bar; 5MB limit; toast with imported/skipped counts.
-  - **Document rooms** (`GET /dashboard/api/documents/{slug}/rooms`) — list rooms linked to a document. New "Linked to rooms" card in document detail view.
-  - **Tests**: 20+ new integration tests across `tests/dashboard_api.rs`, `tests/rooms_api.rs`, `tests/documents_api.rs` — auth gating, CSRF, happy path, input validation, upstream-down.
+- **List deprecated memories endpoint (#1007)** — `GET /lifecycle/deprecated` returns deprecated memories with TTL metadata (deprecated date, expiry date, remaining days). Useful for auditing what's slated for pruning before it's gone.
 
-### Changed
+- **Memory tools guide endpoint (#1010)** — `GET /guide` returns an agent-facing reference document covering all available memory operations. Designed for system-prompt injection — agents can discover capabilities without hardcoded instructions.
 
-- **uteke-web dashboard: auto-generated slug & room_id** — The dashboard API no longer requires (or accepts) a manual `slug` for document creation or `room_id` for room creation. Both are now auto-generated by the server following the uteke naming convention (`escaped_title + "-" + random_suffix`, 6-char alphanumeric suffix, collision-checked against the store with up to 5 retries). The `slug` / `room_id` fields in `POST /dashboard/api/documents` and `POST /dashboard/api/rooms` request bodies are accepted for backward compatibility but **ignored**. When `title` is empty, the slug is derived from the first Markdown heading in `content`; if no heading is found, the slug is just the random suffix. The dashboard SPA forms have been updated to remove the slug / room ID input fields. **Breaking change** for API consumers that relied on supplying their own slug or room_id.
+- **Source provenance for extracted memories (#1012, #1013)** — Memories created via `--extract` now automatically record their source file path and extraction timestamp. CLI and server paths both covered.
 
-### Added
+### Fixed
 
-- **uteke-web dashboard: Rooms page** — Full rooms management UI in the dashboard. Rooms are cross-namespace collaboration spaces that link memories from multiple agents into a shared context.
-  - **Typed API layer** (`crates/uteke-web/src/dashboard_api.rs`): 9 new endpoints under `/dashboard/api/rooms/*` — `GET /rooms` (list), `POST /rooms` (create), `GET /rooms/{id}` (stats), `DELETE /rooms/{id}` (delete), `GET /rooms/{id}/memories` (list memories), `POST /rooms/{id}/memories` (add memory), `GET /rooms/{id}/documents` (list linked docs), `POST /rooms/{id}/documents` (link doc), `DELETE /rooms/{id}/documents` (unlink doc). Each wraps the corresponding upstream `/room/*` endpoint. Session required on all; CSRF required on mutations.
-  - **SPA page** (`dashboard.html`): new "Rooms" nav entry with hash routing (`#/rooms`, `#/rooms/{id}`). List view shows all rooms with title, ID badge, namespace, and last-updated date. Detail view shows stat cards (memories, participants, documents, last activity), participant badges, memories list (clickable to open memory detail modal), and linked documents list (clickable to navigate to document detail). Create room modal, add memory modal (with chip-tag editor + type taxonomy + author field), link document modal, delete confirm modal. All mutations send `X-CSRF-Token`.
-  - **Tests**: 18 integration tests in `tests/rooms_api.rs` — auth gating (session + CSRF), happy path for all 9 endpoints, input validation (empty room_id, empty content), upstream-down 502.
+- **Cross-compilation fails for Android/iOS targets (#1014)** — `ORT_LIB_NAME` environment variable was not cfg'd for mobile targets, breaking `cargo build --target aarch64-linux-android` and `aarch64-apple-ios`. Fixed with conditional compilation flags.
 
-- **uteke-web dashboard: memory ↔ documents cross-reference** — Two-way cross-reference between memories and documents in the dashboard:
-  - **Memory detail modal** now shows the list of documents referenced by the memory via `[[doc-slug]]` wikilinks. New typed endpoint `GET /dashboard/api/memories/{id}/doc-refs` wraps upstream `POST /memory/doc-refs` (#689). Empty list renders "—"; fetch is non-fatal so the modal always opens. Each document is a clickable link to `#/documents/{slug}`.
-  - **Document detail page** now renders the memories referencing the document as a full list (content preview, type badge, importance bar, tags, created date) — not just 8-char ID badges. Each item is clickable to open the memory detail modal. The list is positioned below the parent document card and above the child documents card. Memory details are fetched in parallel via `GET /dashboard/api/memories/{id}`; empty or error → card hidden (non-fatal).
+- **Update check wastes API calls in batch mode (#1006)** — The startup update check ran even during `--batch-dir` imports, adding latency to batch operations. Now skipped when `--batch-dir` is active.
 
-- **uteke-web dashboard typed API layer + full SPA (M7.1–M7.6)** — The dashboard graduated from a minimal recall+remember shell to a full memory management UI. No changes to `uteke-server` — the browser-facing REST contract is owned by `uteke-web`, which translates each call to the upstream server.
-  - **Typed API layer** (`crates/uteke-web/src/dashboard_api.rs`): clean REST contract under `/dashboard/api/*` — `GET /memories` (browse/semantic/fts modes), `GET /memories/{id}`, `POST /memories`, `PUT /memories/{id}`, `DELETE /memories/{id}`, `GET /tags`, `GET /namespaces`, `GET /stats`, `GET /profile`. Replaces the previous generic passthrough (which dropped query strings and exposed raw upstream paths). Session + CSRF enforced on every handler; mutations require the double-submit CSRF token.
-  - **SPA rewrite** (`dashboard_spa()` in `dashboard.rs`): paginated browse table (20/page), 3 search modes (browse / semantic / keyword) with 300ms debounce, namespace + tag dropdown filters (tag counts shown), client-side sort (newest/oldest/importance/type/id), detail modal, create modal with chip-tag editor + fixed memory-type taxonomy, edit modal (content/tags/type/importance slider/pin), forget confirm modal, stats cards, user label from session, pin toggle, colored importance bar, type badges, tag-click filter, responsive layout. All mutations send `X-CSRF-Token`. Built with **Bootstrap 5** (CDN) + **vanilla.js** + Bootstrap Icons — no build step, no framework runtime.
-  - **Memory-type taxonomy fixed** — create/edit validate `memory_type` against the core taxonomy (fact/procedure/preference/decision/context/note/insight/reference/event); invalid values are dropped rather than passed through.
-  - **Tests**: 5 unit tests (struct conversion + type normalization) + 16 integration tests (auth gating, CSRF, all 9 typed handlers against a shape-accurate mock upstream, empty-query fallback). Existing dashboard proxy tests updated to the typed endpoints.
+- **Embedding text not pre-truncated before API call (#1002)** — Long content strings were sent to the embedding API untruncated, causing rejections from providers with token limits. Text is now pre-truncated to the configured `max_chunk_tokens`.
 
-- **uteke-web crate — OAuth2 auth server + reverse proxy + dashboard** — New workspace crate (`crates/uteke-web`) providing a single axum binary with three roles in one process:
-  - **OAuth2 auth server**: authorization code + PKCE (S256), refresh token rotation, dynamic client registration (RFC 7591), metadata (RFC 8414), token revocation (RFC 7009), token introspection (RFC 7662), JWKS placeholder (HS256 → empty keys, migration path to RS256).
-  - **Reverse proxy**: JWT validation middleware (scope enforcement: read/write/admin) → inject static upstream token → forward to uteke-server. CORS passthrough (strip upstream CORS headers), 502/504 error handling, 30s timeout.
-  - **Dashboard web UI**: SPA shell, OAuth2 callback flow, server-side session store (SQLite), HMAC-signed session cookies, session ID rotation, double-submit CSRF protection, `/dashboard/api/*` JSON proxy.
-  - **CLI**: `uteke-web serve`, `uteke-web credential add/delete/list`, `uteke-web user add/delete/list/change-password/unlock`.
-  - **Security**: bcrypt for user/client secrets, SHA-256 hashing for auth codes & refresh tokens, IP rate limiting (5/min) + account lockout (10 failures), audit trail JSONL (always ON), Prometheus metrics (`/metrics`), graceful shutdown, upstream health check (`/healthz`).
-  - **Config**: reads `[web]` section from the same `uteke.toml` with layered resolution + env var overrides (`UTEKE_WEB_JWT_SECRET`, `UTEKE_WEB_UPSTREAM_TOKEN`).
-  - 32 unit tests covering auth store, JWT, PKCE, session cookies, config, audit log.
+### Contributors
+
+- [@ajianaz](https://github.com/ajianaz)
 
 ---
 

@@ -441,8 +441,9 @@ impl crate::Uteke {
                     (&m2.id, &m1.id)
                 };
 
-                // Create "contradicts" memory edge
-                match self.store.add_memory_edge(older, newer, "contradicts") {
+                // Create "contradicts" graph edge
+                let gs = crate::GraphStore::new(&self.store.conn);
+                match gs.add_edge(older, newer, "contradicts", cosine as f64) {
                     Ok(()) => {
                         edges_created += 1;
                         tracing::info!(
@@ -781,70 +782,5 @@ mod tests {
             Some(DreamPhase::Contradict)
         );
         assert_eq!(DreamPhase::Contradict.as_str(), "contradict");
-    }
-
-    #[test]
-    fn contradict_edges_written_to_memory_edges() {
-        // Verify that phase_contradict writes to memory_edges (not the dead entity graph).
-        // Regression test for the fix: before this, edges were written to graph_edges
-        // (FK → graph_nodes) and silently failed with FOREIGN KEY constraint errors.
-        let uteke = crate::Uteke::open(":memory:").unwrap();
-        let store = uteke.store();
-
-        // Two memories: same tag, orthogonal embeddings → low cosine → contradiction.
-        let now = chrono::Utc::now();
-        let m1 = crate::memory::Memory {
-            id: "contradict-test-a".to_string(),
-            content: "topic alpha".to_string(),
-            embedding: vec![0.0; 768],
-            tags: vec!["shared".to_string()],
-            metadata: serde_json::json!({}),
-            created_at: now,
-            updated_at: now,
-            namespace: "default".to_string(),
-            access_count: 0,
-            last_accessed: None,
-            deprecated: false,
-            valid_from: None,
-            valid_until: None,
-            memory_type: "fact".to_string(),
-            importance: 0.5,
-            pinned: false,
-            content_type: "text".to_string(),
-            slug: None,
-            source: None,
-            source_type: "user".to_string(),
-        };
-        let m2 = crate::memory::Memory {
-            id: "contradict-test-b".to_string(),
-            content: "topic beta".to_string(),
-            embedding: vec![1.0; 768],
-            tags: vec!["shared".to_string()],
-            ..m1.clone()
-        };
-
-        store.insert(&m1).unwrap();
-        store.insert(&m2).unwrap();
-
-        let report = uteke.dream(None, false, &[DreamPhase::Contradict]).unwrap();
-
-        assert_eq!(report.phases.len(), 1);
-        assert_eq!(report.phases[0].phase, "contradict");
-        assert!(
-            report.total_changes > 0,
-            "expected contradiction edges to be created"
-        );
-
-        // Verify edges exist in memory_edges (not graph_edges).
-        let edges = store.list_memory_edges("contradict-test-a").unwrap();
-        let contradict_outgoing = edges
-            .outgoing
-            .iter()
-            .filter(|e| e.edge_type == "contradicts")
-            .count();
-        assert!(
-            contradict_outgoing > 0,
-            "expected contradict edges in memory_edges, got none"
-        );
     }
 }

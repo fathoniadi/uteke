@@ -35,34 +35,9 @@ fn parse_json_value(resp: reqwest::blocking::Response) -> Result<serde_json::Val
     resp.json().map_err(|e| format!("Parse error: {e}"))
 }
 
-/// Return the Authorization header value if UTEKE_AUTH_TOKEN is set, or None.
-/// Separated from build_client() so it can be tested without reqwest internals.
-fn resolve_auth_token() -> Option<Result<reqwest::header::HeaderValue, String>> {
-    match std::env::var("UTEKE_AUTH_TOKEN") {
-        Ok(token) => Some(
-            reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
-                .map_err(|_| "Invalid UTEKE_AUTH_TOKEN".to_string()),
-        ),
-        Err(_) => None,
-    }
-}
-
-/// Build an HTTP client with optional bearer auth from UTEKE_AUTH_TOKEN env var.
-fn build_client() -> Result<reqwest::blocking::Client, String> {
-    let mut client_builder = reqwest::blocking::Client::builder();
-    if let Some(token_result) = resolve_auth_token() {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(reqwest::header::AUTHORIZATION, token_result?);
-        client_builder = client_builder.default_headers(headers);
-    }
-    client_builder
-        .build()
-        .map_err(|e| format!("Client error: {e}"))
-}
-
 /// Route CLI commands through the HTTP server for <50ms latency.
 pub(crate) fn run_via_server(cli: &Cli, server_url: &str) -> Result<(), String> {
-    let client = build_client()?;
+    let client = reqwest::blocking::Client::new();
     let ns = cli.namespace.as_deref().unwrap_or("default");
 
     match &cli.command {
@@ -309,43 +284,4 @@ pub(crate) fn run_via_server(cli: &Cli, server_url: &str) -> Result<(), String> 
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resolve_auth_token_from_env() {
-        // Start clean.
-        unsafe {
-            std::env::remove_var("UTEKE_AUTH_TOKEN");
-        }
-
-        // No token set → None.
-        assert!(resolve_auth_token().is_none());
-
-        // Token set → Bearer header.
-        unsafe {
-            std::env::set_var("UTEKE_AUTH_TOKEN", "test-token-123");
-        }
-        let h = resolve_auth_token()
-            .expect("token set → Some")
-            .expect("valid token → Ok");
-        assert_eq!(h.to_str().unwrap(), "Bearer test-token-123");
-
-        // Token changed → new value.
-        unsafe {
-            std::env::set_var("UTEKE_AUTH_TOKEN", "second-token");
-        }
-        let h2 = resolve_auth_token()
-            .expect("changed token → Some")
-            .expect("valid changed token → Ok");
-        assert_eq!(h2.to_str().unwrap(), "Bearer second-token");
-
-        // Cleanup.
-        unsafe {
-            std::env::remove_var("UTEKE_AUTH_TOKEN");
-        }
-    }
 }

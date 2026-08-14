@@ -18,7 +18,7 @@ name = "uteke_web"
 path = "src/lib.rs"
 
 [dependencies]
-uteke-core = { path = "../uteke-core", version = "0.13.2" }
+uteke-core = { path = "../uteke-core", version = "0.14.0" }
 
 # CLI
 clap = { version = "4", features = ["derive"] }

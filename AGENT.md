@@ -21,7 +21,6 @@
 | `uteke-cli` | `crates/uteke-cli/` | CLI binary — clap commands, JSON output, server proxy |
 | `uteke-server` | `crates/uteke-server/` | HTTP server — persistent daemon for fast agent access |
 | `uteke-mcp` | `crates/uteke-mcp/` | MCP server — JSON-RPC for AI tool integration |
-| `uteke-web` | `crates/uteke-web/` | OAuth2 auth server + reverse proxy + dashboard (axum) |
 
 ### Module Structure
 
@@ -71,23 +70,6 @@ crates/uteke-cli/src/
 
 crates/uteke-server/src/
 └── main.rs             # Actix-web server
-
-crates/uteke-web/src/
-├── main.rs             # Entry point — CLI dispatch (serve/credential/user)
-├── cli.rs              # Clap structs (Cli, Commands, CredentialAction, UserAction)
-├── config.rs           # [web] section loading from uteke.toml (layered + env vars)
-├── app.rs              # Axum router builder (route priority: specific → catch-all proxy)
-├── state.rs            # AppState (config, auth store, audit log, reqwest client)
-├── auth_store.rs       # SQLite auth store (clients, users, codes, tokens, sessions)
-├── oauth.rs            # OAuth2 handlers (authorize, login, token, register, metadata, etc.)
-├── proxy.rs            # Reverse proxy (JWT validation + static token injection)
-├── dashboard.rs        # Dashboard SPA + callback + session cookie + CSRF + typed API routes
-├── dashboard_api.rs    # Typed `/dashboard/api/*` REST layer (M7.1) — UtekeClient + handlers
-├── jwt.rs              # HS256 access token mint/verify (jsonwebtoken)
-├── pkce.rs             # PKCE S256 challenge verification
-├── session.rs          # HMAC-signed session cookie helpers
-├── audit.rs            # Audit trail JSONL logger (always ON)
-└── metrics.rs          # Prometheus counters (/metrics)
 ```
 
 ### Key Components
@@ -103,8 +85,6 @@ crates/uteke-web/src/
 | Server | actix-web | CORS enabled, ~42ms warm recall |
 | MCP | JSON-RPC over stdin/stdout | 5 tools: remember, recall, list, forget, stats |
 | Embedder Trait | `Box<dyn Embedder>` | Pluggable: ONNX (default), future: OpenAI, Ollama |
-| Web Auth | axum + jsonwebtoken (HS256) | OAuth2 server + reverse proxy + dashboard (`uteke-web`) |
-| Web Auth Store | SQLite (rusqlite) | `uteke-web.db` — clients, users, codes, tokens, sessions |
 
 ### Schema Versioning
 
@@ -373,21 +353,6 @@ When adding new parameters to the CLI, **don't forget to update server mode too.
 3. Server handler (`uteke-server/src/main.rs`)
 4. API docs
 5. CLI reference docs
-
-### Dashboard Typed API Layer (M7.1–M7.6)
-
-The dashboard SPA talks to a **clean REST contract owned by `uteke-web`** (`/dashboard/api/*`), not to raw uteke-server endpoints. `dashboard_api.rs` is the translator. Lesson from the original M7: a generic passthrough proxy drops query strings and exposes upstream path shapes to the browser — a typed layer is the right boundary.
-
-**When adding a new dashboard capability:**
-1. Add a typed handler in `dashboard_api.rs` (struct request/response + `UtekeClient` call).
-2. Register the route in `dashboard_router()` (`dashboard.rs`).
-3. Wire the SPA call in `dashboard_spa()`.
-4. Add an integration test in `tests/dashboard_api.rs` with a shape-accurate mock upstream.
-5. Update the `/dashboard/api/*` table in `docs/configuration.md`.
-
-`memory_type` on create/edit is validated against the fixed core taxonomy — invalid values are dropped, never forwarded upstream.
-
-The SPA is built with **Bootstrap 5 (CDN) + vanilla.js + Bootstrap Icons** — no build step, no framework runtime. The entire UI lives in a single `dashboard_spa()` raw string in `dashboard.rs`. Bootstrap modals (`bootstrap.Modal`) replace the custom modal CSS; Bootstrap Toast replaces the custom toast. Keep the CDN links version-pinned (`@5.3.3`) and do **not** add `integrity=` SRI hashes unless you generate the correct hash — a dummy/wrong hash will block the stylesheet/script from loading.
 
 ### Function ↔ API ↔ CLI Parity (v0.4.0)
 

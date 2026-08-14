@@ -197,12 +197,12 @@ min_score_strict = 0.5
 
 # Default recall strategy for `uteke recall` when --strategy is not given.
 # One of: vector | fts5 | hybrid | graph.
-#   vector — vector similarity only (original behavior, default)
+#   vector — vector similarity only (original behavior)
 #   fts5   — full-text search only
-#   hybrid — vector + FTS5 fused via Reciprocal Rank Fusion
+#   hybrid — vector + FTS5 fused via Reciprocal Rank Fusion (default)
 #   graph  — hybrid + graph-signal reranking (#378): well-connected memories
 #            get a subtle log-scaled score boost
-default_strategy = "vector"
+default_strategy = "hybrid"
 
 # Graph-augmented reranking weights (only affect the `graph` strategy).
 # Boosts are additive + log-scaled, so 0.1 is subtle and saturates quickly.
@@ -215,7 +215,7 @@ graph_rerank_enabled = true   # master switch; false → graph acts like hybrid
 |---------|---------|-------------|
 | `min_score` | 0.3 | Minimum similarity score (0.0-1.0). **CLI only.** |
 | `min_score_strict` | 0.5 | Strict-mode threshold (used with `--strict`). **CLI only.** |
-| `default_strategy` | `vector` | Default recall strategy (`vector\|fts5\|hybrid\|graph`) |
+| `default_strategy` | `hybrid` | Default recall strategy (`vector\|fts5\|hybrid\|graph`) |
 | `graph_density_weight` | 0.1 | Edge-density boost weight (graph strategy only) |
 | `graph_authority_weight` | 0.1 | Incoming-edge authority boost weight (graph strategy only) |
 | `graph_rerank_enabled` | true | Master switch for graph reranking |
@@ -269,7 +269,7 @@ Resolution order (highest priority first):
 | `UTEKE_SERVER_PORT` | `[server] port` | `8767` | Server port |
 | `UTEKE_RECALL_MIN_SCORE` | `[recall] min_score` | `0.3` | Default similarity threshold |
 | `UTEKE_RECALL_MIN_SCORE_STRICT` | `[recall] min_score_strict` | `0.5` | Strict threshold |
-| `UTEKE_RECALL_STRATEGY` | `[recall] default_strategy` | `vector` | Default recall strategy (`vector\|fts5\|hybrid\|graph`) |
+| `UTEKE_RECALL_STRATEGY` | `[recall] default_strategy` | `hybrid` | Default recall strategy (`vector\|fts5\|hybrid\|graph`) |
 | `UTEKE_GRAPH_DENSITY_WEIGHT` | `[recall] graph_density_weight` | `0.1` | Edge-density boost weight |
 | `UTEKE_GRAPH_AUTHORITY_WEIGHT` | `[recall] graph_authority_weight` | `0.1` | Incoming-edge authority boost weight |
 | `UTEKE_GRAPH_RERANK_ENABLED` | `[recall] graph_rerank_enabled` | `true` | Master switch for graph reranking |
@@ -329,128 +329,6 @@ Namespace is resolved in this order (highest priority first):
 4. **`"default"`** — Built-in default
 
 Switch default namespace permanently with `uteke namespace switch <name>` — this updates the config file.
-
-## uteke-web (`[web]` section)
-
-The `[web]` section configures `uteke-web` — the OAuth2 auth server + reverse proxy + dashboard binary. Only `[web]` is consumed by `uteke-web`; the rest of `uteke.toml` is owned by the other crates.
-
-```toml
-[web]
-listen = "127.0.0.1:8768"
-issuer = "http://localhost:8768"
-upstream = "http://127.0.0.1:8767"
-upstream_token = "static-token-injected-to-upstream"
-jwt_secret = "at-least-32-bytes-hs256-secret"
-db_path = "~/.codecora/uteke/uteke-web.db"
-audit_log_path = "~/.codecora/uteke/uteke-web-audit.jsonl"
-
-[web.dashboard]
-enabled = true
-session_ttl_hours = 24
-
-[web.tls]
-# cert = "/path/cert.pem"
-# key  = "/path/key.pem"
-
-[web.cors]
-enabled = false
-allow_origins = ["*"]
-allow_credentials = false
-```
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `listen` | `127.0.0.1:8768` | Bind address |
-| `issuer` | `http://localhost:8768` | Base URL for OAuth2 endpoints |
-| `upstream` | `http://127.0.0.1:8767` | uteke-server URL to reverse-proxy to |
-| `upstream_token` | (empty) | Static token injected as `Authorization: Bearer <token>` to upstream |
-| `jwt_secret` | (empty) | HS256 signing secret (≥32 bytes); env `UTEKE_WEB_JWT_SECRET` |
-| `db_path` | `~/.codecora/uteke/uteke-web.db` | SQLite auth store path |
-| `audit_log_path` | `~/.codecora/uteke/uteke-web-audit.jsonl` | Audit trail JSONL |
-| `dashboard.enabled` | `true` | Enable the dashboard web UI |
-| `dashboard.session_ttl_hours` | `24` | Session TTL in hours |
-| `tls.cert` / `tls.key` | (empty) | Optional standalone TLS |
-| `cors.enabled` | `false` | Enable CORS for browser-facing endpoints |
-
-### Dashboard typed API (`/dashboard/api/*`)
-
-The dashboard SPA talks to a clean REST contract owned by `uteke-web`; the browser never sees the upstream uteke-server endpoint shape. All handlers require a valid session cookie; mutations (POST/PUT/DELETE) additionally require a matching `X-CSRF-Token` header (double-submit cookie).
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/dashboard/api/memories` | Browse / search (`?q=&mode=list\|semantic\|fts&tag=&namespace=&limit=20&offset=0`) |
-| `GET` | `/dashboard/api/memories/{id}` | Memory detail |
-| `POST` | `/dashboard/api/memories` | Create (`{content, tags, namespace?, memory_type?}`) |
-| `PUT` | `/dashboard/api/memories/{id}` | Edit (`{content?, tags?, memory_type?, importance?, pinned?}`) |
-| `DELETE` | `/dashboard/api/memories/{id}` | Forget (soft-delete) |
-| `GET` | `/dashboard/api/memories/{id}/doc-refs` | Documents referenced by memory |
-| `POST` | `/dashboard/api/memories/{id}/feedback` | Trust scoring feedback (`{feedback: "helpful"\|"unhelpful"}`) — CSRF |
-| `GET` | `/dashboard/api/memories/{id}/graph` | Full knowledge graph (nodes + edges + stats) |
-| `POST` | `/dashboard/api/memories/{id}/edges` | Add graph edge (`{target, edge_type?, weight?}`) — CSRF |
-| `DELETE` | `/dashboard/api/memories/{id}/edges?target=...` | Remove graph edge — CSRF |
-| `GET` | `/dashboard/api/memories/{id}/timeline` | Event history (`?limit=50`) |
-| `GET` | `/dashboard/api/tags` | Tag list with counts (`?namespace=`) |
-| `POST` | `/dashboard/api/tags/rename` | Rename tag (`{old, new, namespace?}`) — CSRF |
-| `DELETE` | `/dashboard/api/tags/{tag}` | Delete tag (`?namespace=`) — CSRF |
-| `GET` | `/dashboard/api/namespaces` | Namespace list |
-| `GET` | `/dashboard/api/stats` | Store stats (`?namespace=`) |
-| `GET` | `/dashboard/api/profile` | Current user (from session, no upstream call) |
-| `GET` | `/dashboard/api/export` | Export all memories as JSONL (`?namespace=`) |
-| `POST` | `/dashboard/api/import` | Import JSONL (`{content, namespace?, tags?}`) — CSRF |
-
-`memory_type` is validated against the fixed taxonomy: `fact`, `procedure`, `preference`, `decision`, `context`, `note`, `insight`, `reference`, `event`. Invalid values are dropped.
-
-#### Documents (`/dashboard/api/documents`)
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/dashboard/api/documents` | List (`?roots_only=&parent=&limit=`) |
-| `GET` | `/dashboard/api/documents/search` | Search (`?q=&mode=hybrid\|semantic\|fts&limit=`) |
-| `GET` | `/dashboard/api/documents/{slug}` | Document detail |
-| `GET` | `/dashboard/api/documents/{slug}/mem-refs` | Memories referencing this document |
-| `GET` | `/dashboard/api/documents/{slug}/rooms` | Rooms linked to this document |
-| `POST` | `/dashboard/api/documents` | Create — body `{content, title?, tags?, parent?}`. **`slug` is auto-generated** from `title` (or first Markdown heading in `content`) per the uteke naming convention. A client-supplied `slug` field is accepted but ignored. |
-| `PUT` | `/dashboard/api/documents/{slug}` | Partial update (`{title?, content?, tags?}`) |
-| `DELETE` | `/dashboard/api/documents/{slug}` | Delete + cascade to children/chunks |
-| `POST` | `/dashboard/api/documents/{slug}/move` | Move (`{new_parent?}` — omit for root) |
-
-#### Rooms (`/dashboard/api/rooms`)
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/dashboard/api/rooms` | List (`?namespace=`) |
-| `POST` | `/dashboard/api/rooms` | Create — body `{title?, namespace?}`. **`room_id` is auto-generated** from `title` per the uteke naming convention. A client-supplied `room_id` field is accepted but ignored. |
-| `GET` | `/dashboard/api/rooms/{id}` | Room stats |
-| `DELETE` | `/dashboard/api/rooms/{id}` | Delete room (memories preserved) |
-| `GET` | `/dashboard/api/rooms/{id}/memories` | List memories in room (`?author=&limit=`) |
-| `POST` | `/dashboard/api/rooms/{id}/memories` | Add memory to room (`{content, tags?, memory_type?, author?}`) |
-| `GET` | `/dashboard/api/rooms/{id}/documents` | List documents linked to room |
-| `POST` | `/dashboard/api/rooms/{id}/documents` | Link document (`{doc_slug}`) |
-| `DELETE` | `/dashboard/api/rooms/{id}/documents` | Unlink document (`{doc_slug}`) |
-| `GET` | `/dashboard/api/rooms/{id}/summary` | Topic clusters & overview |
-| `GET` | `/dashboard/api/rooms/{id}/summary-document` | Structured meeting minutes |
-| `GET` | `/dashboard/api/rooms/{id}/recall` | Semantic search in room (`?q=&limit=&author=`) |
-
-**Slug / room_id naming convention:** `escaped_title + "-" + random_suffix` where `escaped_title` = lowercase(title) → replace spaces & periods with `-` → strip non-alphanumeric (dashes preserved) → trim leading/trailing dashes. `random_suffix` = 6 alphanumeric characters (a-z0-9). The server collision-checks against the store before insert and regenerates the suffix on conflict (up to 5 retries).
-
-#### Settings (`/dashboard/api/settings`)
-
-Credentials & session management — operates on the local `uteke-web.db` auth store (no upstream call). All require session; mutations require CSRF.
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/dashboard/api/settings/clients` | List OAuth2 clients |
-| `POST` | `/dashboard/api/settings/clients` | Register client (`{client_id, client_secret?, redirect_uris?, public?}`) — CSRF |
-| `DELETE` | `/dashboard/api/settings/clients/{id}` | Delete client — CSRF |
-| `GET` | `/dashboard/api/settings/users` | List dashboard users |
-| `POST` | `/dashboard/api/settings/users` | Create user (`{username, password}`) — CSRF |
-| `DELETE` | `/dashboard/api/settings/users/{id}` | Delete user (prevents self-deletion) — CSRF |
-| `PUT` | `/dashboard/api/settings/users/{id}/password` | Change password (`{new_password}`) — CSRF |
-| `POST` | `/dashboard/api/settings/users/{id}/unlock` | Unlock locked user — CSRF |
-| `GET` | `/dashboard/api/settings/sessions` | List active sessions |
-| `DELETE` | `/dashboard/api/settings/sessions/{id}` | Revoke session (prevents self-revocation) — CSRF |
-| `GET` | `/dashboard/api/settings/tokens` | List active OAuth2 refresh tokens (AI agent sessions) |
-| `DELETE` | `/dashboard/api/settings/tokens/{hash}` | Revoke OAuth2 refresh token by hash — CSRF |
 
 ## Per-Project Config
 
@@ -617,6 +495,14 @@ update_check = true    # Set to false to disable startup update notification
 | `update_check` | true | Enable background update notification on startup |
 
 When an update is available, a banner is printed to **stderr** (does not interfere with stdout pipes). The check is non-blocking: it runs in a background thread joined before process exit, so it never delays command execution.
+
+### Skipping in batch/subprocess mode (#1006)
+
+Set the `UTEKE_NO_UPDATE_CHECK=1` environment variable to skip the update check entirely. This is useful for benchmarks, scripts, or automated pipelines that invoke `uteke` many times via subprocess:
+
+```bash
+export UTEKE_NO_UPDATE_CHECK=1
+```
 
 ## Memory Lifecycle (#928–#937)
 

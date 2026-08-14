@@ -257,9 +257,6 @@ pub struct StoreStats {
     pub cache_hits: u64,
     /// Number of recall cache misses.
     pub cache_misses: u64,
-    /// Total number of documents in the knowledge base (global, not per-namespace).
-    #[serde(default)]
-    pub total_documents: usize,
 }
 
 /// Result of a bulk delete operation.

@@ -143,8 +143,6 @@ fn handle_request(uteke: &Uteke, method: &str, params: Option<Value>) -> Result<
                 tool_recall(),
                 tool_search(),
                 tool_list(),
-                tool_update_memory(),
-                tool_update_memory_tags(),
                 tool_forget(),
                 tool_stats(),
                 tool_context(),
@@ -192,8 +190,6 @@ fn handle_request(uteke: &Uteke, method: &str, params: Option<Value>) -> Result<
                 "uteke_recall" => exec_recall(uteke, &arguments)?,
                 "uteke_search" => exec_search(uteke, &arguments)?,
                 "uteke_list" => exec_list(uteke, &arguments)?,
-                "uteke_update_memory" => exec_update_memory(uteke, &arguments)?,
-                "uteke_update_memory_tags" => exec_update_memory_tags(uteke, &arguments)?,
                 "uteke_forget" => exec_forget(uteke, &arguments)?,
                 "uteke_stats" => exec_stats(uteke, &arguments)?,
                 "uteke_context" => exec_context(uteke, &arguments)?,
@@ -291,40 +287,6 @@ fn tool_list() -> Value {
                 "offset": { "type": "integer", "description": "Pagination offset (default 0)", "default": 0 },
                 "namespace": { "type": "string", "description": "Namespace (optional)" }
             }
-        }
-    })
-}
-
-fn tool_update_memory() -> Value {
-    serde_json::json!({
-        "name": "uteke_update_memory",
-        "description": "Update an existing memory's content (and optionally metadata/importance/pinned/type) by its ID. Re-embeds the memory when content changes. Use this instead of re-remembering (which would dedup-skip or duplicate).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "id": { "type": "string", "description": "The memory ID (UUID) to update" },
-                "content": { "type": "string", "description": "New text content (re-embeds the memory)" },
-                "metadata": { "type": "object", "description": "Replacement metadata JSON (optional)" },
-                "importance": { "type": "number", "description": "Importance 0.0..1.0 (optional)" },
-                "pinned": { "type": "boolean", "description": "Pin/unpin so it never decays (optional)" },
-                "type": { "type": "string", "description": "Memory type: fact, procedure, preference, decision, context, note, insight, reference, event (optional)" }
-            },
-            "required": ["id"]
-        }
-    })
-}
-
-fn tool_update_memory_tags() -> Value {
-    serde_json::json!({
-        "name": "uteke_update_memory_tags",
-        "description": "Update (replace) the tags of an existing memory by its ID. Passing tags replaces the FULL tag set — pass the complete desired list. Pass an empty array [] to clear all tags. Use this to add/change/remove tags instead of re-remembering (which would dedup-skip or duplicate).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "id": { "type": "string", "description": "The memory ID (UUID) to update" },
-                "tags": { "type": "array", "items": { "type": "string" }, "description": "Replacement tag set (replaces ALL existing tags). Empty array [] clears tags." }
-            },
-            "required": ["id", "tags"]
         }
     })
 }
@@ -804,90 +766,6 @@ fn tool_graph_remove_edge() -> Value {
 
 // ── Tool Executors ──────────────────────────────────────────────────────────
 
-fn exec_update_memory(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
-    let id = args["id"].as_str().ok_or("Missing 'id'")?;
-
-    let content = args["content"].as_str();
-    let metadata = args["metadata"].clone();
-    let metadata = if metadata.is_null() {
-        None
-    } else {
-        Some(metadata)
-    };
-    let importance = args["importance"].as_f64();
-    let pinned = args["pinned"].as_bool();
-    let memory_type = args["type"].as_str();
-
-    if content.is_none()
-        && metadata.is_none()
-        && importance.is_none()
-        && pinned.is_none()
-        && memory_type.is_none()
-    {
-        return Err(
-            "Nothing to update: provide at least one of content, metadata, importance, pinned, or type"
-                .to_string(),
-        );
-    }
-
-    let updated = uteke
-        .update_memory(
-            id,
-            content,
-            None, // tags handled by uteke_update_memory_tags
-            metadata.as_ref(),
-            importance,
-            pinned,
-            memory_type,
-        )
-        .map_err(|e| format!("Failed: {e}"))?;
-
-    if !updated {
-        return Err(format!("Memory not found: {id}"));
-    }
-
-    Ok(ToolResult {
-        content: vec![McpContent::Text {
-            r#type: "text".to_string(),
-            text: format!("✓ Updated memory: {id}"),
-        }],
-        is_error: false,
-    })
-}
-
-fn exec_update_memory_tags(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
-    let id = args["id"].as_str().ok_or("Missing 'id'")?;
-    let tags: Vec<String> = args["tags"]
-        .as_array()
-        .ok_or("Missing 'tags'")?
-        .iter()
-        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-        .collect();
-
-    // Replace the full tag set on the existing memory (no content change).
-    let updated = uteke
-        .update_memory(id, None, Some(&tags), None, None, None, None)
-        .map_err(|e| format!("Failed: {e}"))?;
-
-    if !updated {
-        return Err(format!("Memory not found: {id}"));
-    }
-
-    let tag_list = if tags.is_empty() {
-        "(cleared)".to_string()
-    } else {
-        tags.join(", ")
-    };
-
-    Ok(ToolResult {
-        content: vec![McpContent::Text {
-            r#type: "text".to_string(),
-            text: format!("✓ Updated tags for {id}: {tag_list}"),
-        }],
-        is_error: false,
-    })
-}
-
 fn exec_remember(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
     let content = args["content"].as_str().ok_or("Missing 'content'")?;
     let tags: Vec<&str> = args["tags"]
@@ -986,7 +864,7 @@ fn exec_recall(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
             uteke_core::SearchResultType::Memory => r
                 .memory_id
                 .as_ref()
-                .map(|id| format!(" (id: {id})"))
+                .map(|id| format!(" (id: {})", &id[..id.len().min(8)]))
                 .unwrap_or_default(),
             uteke_core::SearchResultType::Document => r
                 .doc_slug
@@ -1037,7 +915,10 @@ fn exec_list(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
 
     let lines: Vec<String> = memories
         .iter()
-        .map(|m| format!("[{}] {} ({})", m.id, m.content, m.tags.join(", ")))
+        .map(|m| {
+            let short_id = m.id.get(..8).unwrap_or(&m.id);
+            format!("[{short_id}] {} ({})", m.content, m.tags.join(", "))
+        })
         .collect();
 
     Ok(ToolResult {
@@ -1072,8 +953,8 @@ fn exec_stats(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
         content: vec![McpContent::Text {
             r#type: "text".to_string(),
             text: format!(
-                "Total: {} | Tags: {} | Documents: {} | DB: {} bytes",
-                stats.total_memories, stats.unique_tags, stats.total_documents, stats.db_size_bytes
+                "Total: {} | Tags: {} | DB: {} bytes",
+                stats.total_memories, stats.unique_tags, stats.db_size_bytes
             ),
         }],
         is_error: false,

@@ -23,3 +23,12 @@ scripts/demo-record.sh
 lcov.info
 cobertura.xml
 coverage/
+
+# Internal docs — never commit to public repo
+internal/
+
+# Benchmark results (large, ephemeral — commit RESULTS.md summaries, not raw data)
+benchmarks/longmemeval/results_*/
+
+# VitePress build artifacts (keep config.ts, not lock files)
+docs/package-lock.json

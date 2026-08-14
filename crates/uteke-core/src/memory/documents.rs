@@ -820,6 +820,8 @@ impl super::Store {
     }
 
     /// Count all documents (global).
+    #[deprecated(note = "unused — candidate for removal in future version")]
+    #[allow(dead_code)]
     pub fn count_documents(&self) -> Result<usize, Error> {
         let count: i64 = self
             .conn
