@@ -1258,6 +1258,446 @@ pub async fn handle_move_document(
     Json(val).into_response()
 }
 
+// ── Rooms (PLAN-rooms.md) ───────────────────────────────────────────────────
+//
+// Typed wrappers around upstream `/room/*` and `/doc/room/*` endpoints.
+// Rooms are cross-namespace collaboration spaces — a room links memories
+// from multiple agents/namespaces into a shared context.
+//
+// Dashboard contract:
+//   GET    /dashboard/api/rooms                 — list rooms
+//   POST   /dashboard/api/rooms                 — create room
+//   GET    /dashboard/api/rooms/{id}            — room stats (summary info)
+//   DELETE /dashboard/api/rooms/{id}            — delete room
+//   GET    /dashboard/api/rooms/{id}/memories   — list memories in room
+//   POST   /dashboard/api/rooms/{id}/memories   — add memory to room
+//   GET    /dashboard/api/rooms/{id}/documents  — list documents linked to room
+//   POST   /dashboard/api/rooms/{id}/documents  — link a document to room
+//   DELETE /dashboard/api/rooms/{id}/documents  — unlink a document from room
+
+use uteke_core::{Room, RoomStats};
+
+/// Normalized room row for the SPA table.
+#[derive(Debug, Clone, Serialize)]
+pub struct DashboardRoom {
+    pub id: String,
+    pub title: String,
+    pub namespace: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl From<Room> for DashboardRoom {
+    fn from(r: Room) -> Self {
+        Self {
+            id: r.id,
+            title: r.title.unwrap_or_default(),
+            namespace: r.namespace,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        }
+    }
+}
+
+/// `GET /dashboard/api/rooms` query params.
+#[derive(Debug, Deserialize)]
+pub struct RoomListQuery {
+    #[serde(default)]
+    pub namespace: Option<String>,
+}
+
+/// `POST /dashboard/api/rooms` body.
+#[derive(Debug, Deserialize)]
+pub struct CreateRoomRequest {
+    pub room_id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub namespace: Option<String>,
+}
+
+/// `POST /dashboard/api/rooms/{id}/memories` body.
+#[derive(Debug, Deserialize)]
+pub struct CreateRoomMemoryRequest {
+    pub content: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub memory_type: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
+}
+
+/// `POST /dashboard/api/rooms/{id}/documents` body.
+#[derive(Debug, Deserialize)]
+pub struct LinkRoomDocumentRequest {
+    pub doc_slug: String,
+}
+
+/// `GET /dashboard/api/rooms/{id}/memories` query params.
+#[derive(Debug, Deserialize)]
+pub struct RoomMemoriesQuery {
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default = "default_room_limit")]
+    pub limit: usize,
+}
+
+/// `GET /dashboard/api/rooms/{id}/memories` query params.
+fn default_room_limit() -> usize {
+    100
+}
+
+// ── Room handlers ───────────────────────────────────────────────────────────
+
+/// `GET /dashboard/api/rooms` — list rooms.
+/// Wraps upstream `GET /room/list`.
+pub async fn handle_list_rooms(
+    State(state): State<AppState>,
+    Query(q): Query<RoomListQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let client = UtekeClient::new(&state);
+    let path = match q.namespace.as_deref().filter(|n| !n.is_empty()) {
+        Some(ns) => format!("/room/list?namespace={}", urlencoding::encode(ns)),
+        None => "/room/list".to_string(),
+    };
+    let resp = match client.get(&path).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let rooms: Vec<Room> = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let rows: Vec<DashboardRoom> = rooms.into_iter().map(DashboardRoom::from).collect();
+    Json(rows).into_response()
+}
+
+/// `POST /dashboard/api/rooms` — create room.
+/// Wraps upstream `POST /room/create`. Requires session + CSRF.
+pub async fn handle_create_room(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let req: CreateRoomRequest = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return api_error(StatusCode::BAD_REQUEST, &format!("invalid body: {e}")),
+    };
+    if req.room_id.trim().is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "room_id must not be empty");
+    }
+    let client = UtekeClient::new(&state);
+    let mut payload = serde_json::json!({
+        "room_id": req.room_id,
+        "title": req.title,
+    });
+    if let Some(ns) = req.namespace.as_deref().filter(|n| !n.is_empty()) {
+        payload["namespace"] = serde_json::json!(ns);
+    }
+    let resp = match client.post("/room/create", &payload).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+/// `GET /dashboard/api/rooms/{id}` — room stats.
+/// Wraps upstream `POST /room/stats`.
+pub async fn handle_get_room(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let client = UtekeClient::new(&state);
+    let body = serde_json::json!({ "room_id": id });
+    let resp = match client.post("/room/stats", &body).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        let code =
+            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        return api_error(code, &body_text);
+    }
+    let stats: Option<RoomStats> = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("upstream decode error: {e}"),
+            );
+        }
+    };
+    match stats {
+        Some(s) => Json(s).into_response(),
+        None => api_error(StatusCode::NOT_FOUND, "room not found"),
+    }
+}
+
+/// `DELETE /dashboard/api/rooms/{id}` — delete room.
+/// Wraps upstream `DELETE /room/delete?room_id=`. Requires session + CSRF.
+pub async fn handle_delete_room(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let client = UtekeClient::new(&state);
+    let path = format!("/room/delete?room_id={}", urlencoding::encode(&id));
+    let resp = match client.delete(&path).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+/// `GET /dashboard/api/rooms/{id}/memories` — list memories in a room.
+/// Wraps upstream `GET /room/memories?room_id=&author=&limit=`.
+pub async fn handle_list_room_memories(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<RoomMemoriesQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let client = UtekeClient::new(&state);
+    let mut path = format!(
+        "/room/memories?room_id={}&limit={}",
+        urlencoding::encode(&id),
+        q.limit
+    );
+    if let Some(a) = q.author.as_deref().filter(|a| !a.is_empty()) {
+        path.push_str(&format!("&author={}", urlencoding::encode(a)));
+    }
+    let resp = match client.get(&path).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let memories: Vec<Memory> = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let rows: Vec<DashboardMemory> = memories.into_iter().map(DashboardMemory::from).collect();
+    Json(rows).into_response()
+}
+
+/// `POST /dashboard/api/rooms/{id}/memories` — add memory to room.
+/// Wraps upstream `POST /room/remember`. Requires session + CSRF.
+pub async fn handle_create_room_memory(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let req: CreateRoomMemoryRequest = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return api_error(StatusCode::BAD_REQUEST, &format!("invalid body: {e}")),
+    };
+    if req.content.trim().is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "content must not be empty");
+    }
+    let mem_type = normalize_memory_type(&req.memory_type);
+    let client = UtekeClient::new(&state);
+    let mut payload = serde_json::json!({
+        "room_id": id,
+        "content": req.content,
+        "tags": req.tags,
+    });
+    if let Some(t) = mem_type {
+        payload["type"] = serde_json::json!(t);
+    }
+    if let Some(a) = req.author.as_deref().filter(|a| !a.is_empty()) {
+        payload["author"] = serde_json::json!(a);
+    }
+    let resp = match client.post("/room/remember", &payload).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+/// `GET /dashboard/api/rooms/{id}/documents` — list documents linked to room.
+/// Wraps upstream `POST /room/document/list`.
+pub async fn handle_list_room_documents(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let client = UtekeClient::new(&state);
+    let body = serde_json::json!({ "room_id": id });
+    let resp = match client.post("/room/document/list", &body).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+/// `POST /dashboard/api/rooms/{id}/documents` — link a document to a room.
+/// Wraps upstream `PUT /room/document/add`. Requires session + CSRF.
+pub async fn handle_link_room_document(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let req: LinkRoomDocumentRequest = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return api_error(StatusCode::BAD_REQUEST, &format!("invalid body: {e}")),
+    };
+    if req.doc_slug.trim().is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "doc_slug must not be empty");
+    }
+    let client = UtekeClient::new(&state);
+    let payload = serde_json::json!({
+        "room_id": id,
+        "doc_slug": req.doc_slug,
+    });
+    let resp = match client.put("/room/document/add", &payload).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+/// `DELETE /dashboard/api/rooms/{id}/documents` — unlink a document from a room.
+/// Wraps upstream `DELETE /room/document/remove`. Requires session + CSRF.
+pub async fn handle_unlink_room_document(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let req: LinkRoomDocumentRequest = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return api_error(StatusCode::BAD_REQUEST, &format!("invalid body: {e}")),
+    };
+    let client = UtekeClient::new(&state);
+    let payload = serde_json::json!({
+        "room_id": id,
+        "doc_slug": req.doc_slug,
+    });
+    // Upstream DELETE expects a JSON body (not query params).
+    let mut h = HeaderMap::new();
+    state.apply_upstream_auth(&mut h);
+    let resp = match client
+        .state
+        .http_client
+        .delete(client.url("/room/document/remove"))
+        .headers(h)
+        .json(&payload)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

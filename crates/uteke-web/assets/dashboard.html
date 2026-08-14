@@ -81,6 +81,7 @@
   <ul class="nav flex-column">
     <li class="nav-item"><a class="nav-link" href="#/memories" data-page="memories"><i class="bi bi-collection"></i> Memories</a></li>
     <li class="nav-item"><a class="nav-link" href="#/documents" data-page="documents"><i class="bi bi-file-earmark-text"></i> Documents</a></li>
+    <li class="nav-item"><a class="nav-link" href="#/rooms" data-page="rooms"><i class="bi bi-chat-dots"></i> Rooms</a></li>
   </ul>
   <div class="sidebar-user">
     <div id="user-label" class="text-light small mb-1">—</div>
@@ -239,6 +240,127 @@
     </div>
   </div>
 </div><!-- /page-docs -->
+
+<!-- ── Rooms page ──────────────────────────────────────────────────────── -->
+<div id="page-rooms" style="display:none;">
+  <!-- Rooms list view -->
+  <div id="rooms-list-view" class="container-fluid py-3" style="max-width:1180px;">
+    <div class="d-flex align-items-center mb-3 gap-2">
+      <h4 class="mb-0">Rooms</h4>
+      <button class="btn btn-sm btn-primary ms-auto" onclick="roomOpenCreate()"><i class="bi bi-plus-lg"></i> New room</button>
+    </div>
+    <div id="room-rows"></div>
+    <div id="room-empty" class="text-center text-muted py-4" style="display:none;">No rooms.</div>
+  </div>
+
+  <!-- Room detail view -->
+  <div id="rooms-detail-view" class="container-fluid py-3" style="max-width:900px; display:none;">
+    <div class="mb-3">
+      <button class="btn btn-sm btn-outline-secondary" onclick="roomBackToList()" title="Back"><i class="bi bi-arrow-left"></i></button>
+      <button class="btn btn-sm btn-outline-danger ms-2" onclick="roomOpenDelete()" title="Delete"><i class="bi bi-trash"></i></button>
+    </div>
+    <div class="card mb-3">
+      <div class="card-body">
+        <h4 id="room-detail-title" class="mb-2"></h4>
+        <div class="mb-2">
+          <span class="badge bg-secondary me-1" id="room-detail-id"></span>
+          <span class="badge bg-info text-white me-1" id="room-detail-ns"></span>
+          <span class="text-muted small" id="room-detail-dates"></span>
+        </div>
+        <div class="row g-3 mt-1">
+          <div class="col-6 col-md-3"><div class="card text-center h-100"><div class="card-body py-2"><div class="stat-num text-primary" id="room-stat-memories">—</div><div class="stat-label">Memories</div></div></div></div>
+          <div class="col-6 col-md-3"><div class="card text-center h-100"><div class="card-body py-2"><div class="stat-num text-info" id="room-stat-participants">—</div><div class="stat-label">Participants</div></div></div></div>
+          <div class="col-6 col-md-3"><div class="card text-center h-100"><div class="card-body py-2"><div class="stat-num text-success" id="room-stat-docs">—</div><div class="stat-label">Documents</div></div></div></div>
+          <div class="col-6 col-md-3"><div class="card text-center h-100"><div class="card-body py-2"><div class="stat-num text-warning" id="room-stat-activity">—</div><div class="stat-label">Last activity</div></div></div></div>
+        </div>
+        <div id="room-detail-participants" class="mt-2"></div>
+      </div>
+    </div>
+    <div class="card mb-3">
+      <div class="card-header d-flex align-items-center">
+        <span class="small text-muted">Memories in room</span>
+        <button class="btn btn-sm btn-outline-primary ms-auto" onclick="roomOpenAddMemory()"><i class="bi bi-plus-lg"></i> Add memory</button>
+      </div>
+      <div class="list-group list-group-flush" id="room-memories-body"></div>
+    </div>
+    <div class="card">
+      <div class="card-header d-flex align-items-center">
+        <span class="small text-muted">Linked documents</span>
+        <button class="btn btn-sm btn-outline-primary ms-auto" onclick="roomOpenLinkDoc()"><i class="bi bi-plus-lg"></i> Link document</button>
+      </div>
+      <div class="list-group list-group-flush" id="room-docs-body"></div>
+    </div>
+  </div>
+</div><!-- /page-rooms -->
+
+<!-- Room create modal -->
+<div class="modal fade" id="m-room-create" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">New room</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <div class="mb-3"><label class="form-label">Room ID <span class="text-danger">*</span></label><input id="room-create-id" class="form-control" placeholder="unique-room-id"></div>
+        <div class="mb-3"><label class="form-label">Title</label><input id="room-create-title" class="form-control" placeholder="Room title"></div>
+        <div class="mb-3"><label class="form-label">Namespace</label><input id="room-create-ns" class="form-control" list="ns-list" placeholder="default"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" onclick="roomSubmitCreate()"><i class="bi bi-save"></i> Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Room add memory modal -->
+<div class="modal fade" id="m-room-add-mem" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Add memory to room</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <div class="mb-3"><label class="form-label">Content <span class="text-danger">*</span></label><textarea id="room-add-mem-content" class="form-control" rows="8"></textarea></div>
+        <div class="mb-3"><label class="form-label">Tags</label><div class="chips" id="room-add-mem-tags"></div></div>
+        <div class="row g-3">
+          <div class="col-md-6"><label class="form-label">Type</label><select id="room-add-mem-type" class="form-select"></select></div>
+          <div class="col-md-6"><label class="form-label">Author</label><input id="room-add-mem-author" class="form-control" placeholder="user"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" onclick="roomSubmitAddMemory()"><i class="bi bi-save"></i> Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Room link document modal -->
+<div class="modal fade" id="m-room-link-doc" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Link document to room</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <div class="mb-3"><label class="form-label">Document slug <span class="text-danger">*</span></label><input id="room-link-doc-slug" class="form-control" placeholder="document-slug"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" onclick="roomSubmitLinkDoc()"><i class="bi bi-link-45deg"></i> Link</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Room delete confirm -->
+<div class="modal fade" id="m-room-delete" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title text-danger"><i class="bi bi-exclamation-triangle"></i> Delete room?</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body"><p id="room-del-msg" class="text-muted mb-0"></p></div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-danger" onclick="roomConfirmDelete()"><i class="bi bi-trash"></i> Delete</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- Document create/edit modal -->
 <div class="modal fade" id="m-doc-edit" tabindex="-1">
@@ -790,6 +912,7 @@ function initDocModals(){
 function showPage(name){
   document.getElementById("page-memories").style.display = name === "memories" ? "" : "none";
   document.getElementById("page-docs").style.display = name === "documents" ? "" : "none";
+  document.getElementById("page-rooms").style.display = name === "rooms" ? "" : "none";
   document.querySelectorAll(".sidebar .nav-link").forEach(t => t.classList.toggle("active", t.dataset.page === name));
 }
 function toggleSidebar(){
@@ -814,6 +937,13 @@ function routeHash(){
   } else if(h.startsWith("/documents")){
     showPage("documents");
     docShowList();
+  } else if(h.startsWith("/rooms/")){
+    const id = decodeURIComponent(h.slice("/rooms/".length));
+    showPage("rooms");
+    roomShowDetail(id);
+  } else if(h.startsWith("/rooms")){
+    showPage("rooms");
+    roomShowList();
   } else {
     showPage("memories");
   }
@@ -1158,6 +1288,217 @@ function docShowList(){
   docLoad();
 }
 
+// ── Rooms ─────────────────────────────────────────────────────────────────
+let R = { rows: [], currentId: null };
+let roomModals = {};
+function initRoomModals(){
+  ["m-room-create","m-room-add-mem","m-room-link-doc","m-room-delete"].forEach(id => { roomModals[id] = new bootstrap.Modal(document.getElementById(id)); });
+}
+
+// ── Rooms: list ────────────────────────────────────────────────────────────
+async function roomLoad(){
+  try {
+    R.rows = await apiGet("/dashboard/api/rooms");
+    roomRender();
+  } catch(e){ toast("Room load failed: "+e.message); }
+}
+function roomRender(){
+  const tb = $("room-rows");
+  if(!R.rows.length){ tb.innerHTML=""; $("room-empty").style.display="block"; return; }
+  $("room-empty").style.display="none";
+  tb.innerHTML = R.rows.map(r => `
+    <div class="card mem-card mb-2">
+      <div class="card-body py-2 px-3">
+        <div class="d-flex align-items-center gap-2 mb-1">
+          <i class="bi bi-chat-dots text-primary"></i>
+          <span class="fw-medium cursor-pointer" onclick="roomShowDetail('${esc(r.id)}')">${esc(r.title || r.id)}</span>
+          <span class="badge bg-secondary small">${esc(r.id)}</span>
+          <span class="text-muted small ms-auto">${fmtDate(r.updated_at || r.created_at)}</span>
+        </div>
+        <div class="small text-muted">namespace: ${esc(r.namespace || "—")}</div>
+      </div>
+    </div>`).join("");
+}
+
+// ── Rooms: detail ──────────────────────────────────────────────────────────
+async function roomShowDetail(id){
+  R.currentId = id;
+  document.getElementById("rooms-list-view").style.display = "none";
+  document.getElementById("rooms-detail-view").style.display = "";
+  try {
+    // Fetch stats + memories + documents in parallel.
+    const [stats, memories, docs] = await Promise.all([
+      apiGet("/dashboard/api/rooms/"+encodeURIComponent(id)).catch(() => null),
+      apiGet("/dashboard/api/rooms/"+encodeURIComponent(id)+"/memories?limit=100").catch(() => []),
+      apiGet("/dashboard/api/rooms/"+encodeURIComponent(id)+"/documents").catch(() => null),
+    ]);
+    // Header.
+    document.getElementById("room-detail-title").textContent = (stats && stats.title) || id;
+    document.getElementById("room-detail-id").textContent = id;
+    document.getElementById("room-detail-ns").textContent = stats ? stats.namespace || "—" : "—";
+    const created = stats ? stats.created_at : "—";
+    const lastAct = stats && stats.last_activity ? stats.last_activity : null;
+    document.getElementById("room-detail-dates").textContent = "Created " + fmtDate(created) + (lastAct ? " · Last activity " + fmtDate(lastAct) : "");
+    // Stat cards.
+    document.getElementById("room-stat-memories").textContent = stats ? stats.memory_count : "—";
+    document.getElementById("room-stat-participants").textContent = stats ? stats.participant_count : "—";
+    const docSlugs = (docs && docs.doc_slugs) || [];
+    document.getElementById("room-stat-docs").textContent = docSlugs.length;
+    document.getElementById("room-stat-activity").textContent = lastAct ? fmtDate(lastAct) : "—";
+    // Participants.
+    const participants = (stats && stats.participants) || [];
+    $("room-detail-participants").innerHTML = participants.length
+      ? participants.map(p => `<span class="badge bg-light text-dark border me-1 mb-1"><i class="bi bi-person me-1"></i>${esc(p)}</span>`).join("")
+      : "";
+    // Memories list.
+    roomRenderMemories(memories || []);
+    // Documents list.
+    roomRenderDocs(docSlugs);
+  } catch(e){
+    toast("Failed to load room: "+e.message);
+    roomBackToList();
+  }
+}
+function roomRenderMemories(mems){
+  const body = $("room-memories-body");
+  if(!mems.length){ body.innerHTML = '<div class="list-group-item text-muted small py-2">No memories in this room.</div>'; return; }
+  body.innerHTML = mems.map(m => {
+    const imp = m.importance ?? 0;
+    const tagsPills = (m.tags||[]).map(t => `<span class="badge bg-info text-white me-1">${esc(t)}</span>`).join("");
+    return `<div class="list-group-item list-group-item-action cursor-pointer py-2 px-3" onclick="openDetail('${esc(m.id)}')">
+      <div class="d-flex align-items-center gap-2 mb-1">
+        <span class="id-mono small">${esc(shortId(m.id))}</span>
+        <span class="badge type-badge bg-${typeColor(m.memory_type||"note")}">${esc(m.memory_type||"note")}</span>
+        ${m.pinned ? '<span class="text-warning">★</span>' : ""}
+        <span class="text-muted small ms-auto">${fmtDate(m.created_at)}</span>
+      </div>
+      <div class="trunc">${esc(truncSentences(m.content, 2))}</div>
+      <div class="d-flex align-items-center gap-2 mt-1">
+        <span class="small text-muted">Importance</span>
+        <span class="imp-bar"><span style="width:${Math.round(imp*100)}%;background:${impColor(imp)}"></span></span>
+        <span class="small text-muted">${imp.toFixed(2)}</span>
+      </div>
+      ${tagsPills ? `<div class="mem-tags mt-1">${tagsPills}</div>` : ""}
+    </div>`;
+  }).join("");
+}
+function roomRenderDocs(slugs){
+  const body = $("room-docs-body");
+  if(!slugs.length){ body.innerHTML = '<div class="list-group-item text-muted small py-2">No documents linked.</div>'; return; }
+  body.innerHTML = slugs.map(s => `
+    <div class="list-group-item d-flex align-items-center py-2 px-3">
+      <i class="bi bi-file-earmark-text me-2"></i>
+      <a href="#/documents/${encodeURIComponent(s)}" class="text-decoration-none">${esc(s)}</a>
+      <button class="btn btn-sm btn-outline-danger ms-auto py-0 px-1" onclick="roomUnlinkDoc('${esc(s)}')" title="Unlink"><i class="bi bi-x-lg"></i></button>
+    </div>`).join("");
+}
+function roomBackToList(){
+  document.getElementById("rooms-detail-view").style.display = "none";
+  document.getElementById("rooms-list-view").style.display = "";
+  R.currentId = null;
+  if(window.location.hash !== "#/rooms") window.location.hash = "#/rooms";
+}
+function roomShowList(){
+  document.getElementById("rooms-detail-view").style.display = "none";
+  document.getElementById("rooms-list-view").style.display = "";
+  R.currentId = null;
+  roomLoad();
+}
+
+// ── Rooms: create ──────────────────────────────────────────────────────────
+function roomOpenCreate(){
+  $("room-create-id").value = "";
+  $("room-create-title").value = "";
+  $("room-create-ns").value = S.ns || "";
+  roomModals["m-room-create"].show();
+}
+async function roomSubmitCreate(){
+  const id = $("room-create-id").value.trim();
+  if(!id){ toast("Room ID required"); return; }
+  const body = { room_id: id, title: $("room-create-title").value.trim() || null };
+  const ns = $("room-create-ns").value.trim();
+  if(ns) body.namespace = ns;
+  try {
+    await apiMutate("/dashboard/api/rooms", "POST", body);
+    roomModals["m-room-create"].hide();
+    toast("Room created");
+    roomLoad();
+  } catch(e){ toast("Create failed: "+e.message); }
+}
+
+// ── Rooms: add memory ──────────────────────────────────────────────────────
+function roomOpenAddMemory(){
+  $("room-add-mem-content").value = "";
+  makeChips($("room-add-mem-tags"), []);
+  fillTypeSelect($("room-add-mem-type"), "note");
+  $("room-add-mem-author").value = "";
+  roomModals["m-room-add-mem"].show();
+}
+async function roomSubmitAddMemory(){
+  if(!R.currentId) return;
+  const content = $("room-add-mem-content").value.trim();
+  if(!content){ toast("Content required"); return; }
+  const tags = $("room-add-mem-tags")._get();
+  const body = { content, tags };
+  const t = $("room-add-mem-type").value;
+  if(t) body.memory_type = t;
+  const author = $("room-add-mem-author").value.trim();
+  if(author) body.author = author;
+  try {
+    await apiMutate("/dashboard/api/rooms/"+encodeURIComponent(R.currentId)+"/memories", "POST", body);
+    roomModals["m-room-add-mem"].hide();
+    toast("Memory added");
+    roomShowDetail(R.currentId);
+  } catch(e){ toast("Add failed: "+e.message); }
+}
+
+// ── Rooms: link/unlink document ────────────────────────────────────────────
+function roomOpenLinkDoc(){
+  $("room-link-doc-slug").value = "";
+  roomModals["m-room-link-doc"].show();
+}
+async function roomSubmitLinkDoc(){
+  if(!R.currentId) return;
+  const slug = $("room-link-doc-slug").value.trim();
+  if(!slug){ toast("Document slug required"); return; }
+  try {
+    await apiMutate("/dashboard/api/rooms/"+encodeURIComponent(R.currentId)+"/documents", "POST", { doc_slug: slug });
+    roomModals["m-room-link-doc"].hide();
+    toast("Document linked");
+    roomShowDetail(R.currentId);
+  } catch(e){ toast("Link failed: "+e.message); }
+}
+async function roomUnlinkDoc(slug){
+  if(!R.currentId) return;
+  try {
+    await apiMutate("/dashboard/api/rooms/"+encodeURIComponent(R.currentId)+"/documents", "DELETE", { doc_slug: slug });
+    toast("Document unlinked");
+    roomShowDetail(R.currentId);
+  } catch(e){ toast("Unlink failed: "+e.message); }
+}
+
+// ── Rooms: delete ──────────────────────────────────────────────────────────
+function roomOpenDelete(){
+  if(!R.currentId) return;
+  $("room-del-msg").textContent = `Delete room "${R.currentId}"? Memory links will be removed (memories themselves are NOT deleted).`;
+  roomModals["m-room-delete"].show();
+}
+async function roomConfirmDelete(){
+  if(!R.currentId) return;
+  try {
+    await apiMutate("/dashboard/api/rooms/"+encodeURIComponent(R.currentId), "DELETE");
+    roomModals["m-room-delete"].hide();
+    toast("Room deleted");
+    R.currentId = null;
+    window.location.hash = "#/rooms";
+  } catch(e){ toast("Delete failed: "+e.message); }
+}
+
+// ── Init rooms ─────────────────────────────────────────────────────────────
+function initRooms(){
+  initRoomModals();
+}
+
 // ── Init docs ─────────────────────────────────────────────────────────────
 function initDocs(){
   initDocModals();
@@ -1166,6 +1507,7 @@ function initDocs(){
   document.getElementById("doc-filter").addEventListener("change", onDocFilterChange);
 }
 initDocs();
+initRooms();
 routeHash();
 </script>
 </div><!-- /main-wrapper -->

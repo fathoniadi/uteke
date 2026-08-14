@@ -89,6 +89,26 @@ pub fn dashboard_router() -> axum::Router<AppState> {
             "/dashboard/api/documents/{slug}/move",
             post(dashboard_api::handle_move_document),
         )
+        // Rooms (PLAN-rooms.md) — wrap upstream `/room/*`.
+        .route(
+            "/dashboard/api/rooms",
+            get(dashboard_api::handle_list_rooms).post(dashboard_api::handle_create_room),
+        )
+        .route(
+            "/dashboard/api/rooms/{id}",
+            get(dashboard_api::handle_get_room).delete(dashboard_api::handle_delete_room),
+        )
+        .route(
+            "/dashboard/api/rooms/{id}/memories",
+            get(dashboard_api::handle_list_room_memories)
+                .post(dashboard_api::handle_create_room_memory),
+        )
+        .route(
+            "/dashboard/api/rooms/{id}/documents",
+            get(dashboard_api::handle_list_room_documents)
+                .post(dashboard_api::handle_link_room_document)
+                .delete(dashboard_api::handle_unlink_room_document),
+        )
 }
 
 // ── Dashboard index ─────────────────────────────────────────────────────────
