@@ -100,6 +100,37 @@ async fn spawn_room_upstream() -> std::net::SocketAddr {
         let id = q.get("room_id").cloned().unwrap_or_default();
         (StatusCode::OK, format!(r#"{{"deleted":"{id}"}}"#))
     }
+    async fn room_summary(b: String) -> impl IntoResponse {
+        let room_id = serde_json::from_str::<serde_json::Value>(&b)
+            .ok()
+            .and_then(|v| v.get("room_id").and_then(|s| s.as_str()).map(String::from))
+            .unwrap_or_default();
+        if room_id == "room-1" {
+            (StatusCode::OK, r#"{"room_id":"room-1","title":"Planning","total_memories":3,"participants":["alice","bob"],"time_range":{"earliest":"2026-01-01T00:00:00Z","latest":"2026-01-02T00:00:00Z"},"clusters":[{"topic":"deploy","memory_count":2,"top_memories":["deploy v1","deploy v2"],"tags":["deploy"],"participants":["alice"],"score":0.8}],"top_tags":[{"name":"plan","count":3}],"recent_decisions":["use k8s"],"pinned_highlights":["important pin"]}"#.to_string())
+        } else {
+            (
+                StatusCode::NOT_FOUND,
+                format!(r#"{{"error":"Room not found: {room_id}"}}"#),
+            )
+        }
+    }
+    async fn room_summary_document(b: String) -> impl IntoResponse {
+        let room_id = serde_json::from_str::<serde_json::Value>(&b)
+            .ok()
+            .and_then(|v| v.get("room_id").and_then(|s| s.as_str()).map(String::from))
+            .unwrap_or_default();
+        if room_id == "room-1" {
+            (StatusCode::OK, r#"{"room_id":"room-1","title":"Planning","generated_at":"2026-01-02T00:00:00","sections":[{"heading":"Pinned","icon":"📌","entries":[{"content":"Pinned item","author":"alice","tags":["pin"],"created_at":"2026-01-01T00:00:00"}]}]}"#.to_string())
+        } else {
+            (
+                StatusCode::NOT_FOUND,
+                format!(r#"{{"error":"Room not found: {room_id}"}}"#),
+            )
+        }
+    }
+    async fn room_recall(_b: String) -> impl IntoResponse {
+        (StatusCode::OK, format!("[{MEMORY_JSON}]"))
+    }
 
     let app = axum::Router::new()
         .route("/room/list", get(room_list))
@@ -110,7 +141,10 @@ async fn spawn_room_upstream() -> std::net::SocketAddr {
         .route("/room/document/list", post(room_doc_list))
         .route("/room/document/add", put(room_doc_add))
         .route("/room/document/remove", delete(room_doc_remove))
-        .route("/room/delete", delete(room_delete));
+        .route("/room/delete", delete(room_delete))
+        .route("/room/summary", post(room_summary))
+        .route("/room/summary-document", post(room_summary_document))
+        .route("/room/recall", post(room_recall));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -541,4 +575,94 @@ async fn room_list_upstream_down_returns_502() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+}
+
+// ── Room summary tests ──────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn room_summary_requires_session() {
+    let app = TestApp::new().await;
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/rooms/room-1/summary")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn room_summary_returns_data() {
+    let upstream = spawn_room_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/rooms/room-1/summary")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert_eq!(json["room_id"], "room-1");
+    assert_eq!(json["total_memories"], 3);
+    assert!(json["clusters"].is_array());
+}
+
+#[tokio::test]
+async fn room_summary_document_returns_data() {
+    let upstream = spawn_room_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/rooms/room-1/summary-document")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert_eq!(json["room_id"], "room-1");
+    assert!(json["sections"].is_array());
+    assert_eq!(json["sections"][0]["heading"], "Pinned");
+}
+
+#[tokio::test]
+async fn room_recall_returns_results() {
+    let upstream = spawn_room_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/rooms/room-1/recall?q=deploy&limit=5")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert!(json.is_array());
+    assert!(!json.as_array().unwrap().is_empty());
 }

@@ -82,6 +82,7 @@
     <li class="nav-item"><a class="nav-link" href="#/memories" data-page="memories"><i class="bi bi-collection"></i> Memories</a></li>
     <li class="nav-item"><a class="nav-link" href="#/documents" data-page="documents"><i class="bi bi-file-earmark-text"></i> Documents</a></li>
     <li class="nav-item"><a class="nav-link" href="#/rooms" data-page="rooms"><i class="bi bi-chat-dots"></i> Rooms</a></li>
+    <li class="nav-item"><a class="nav-link" href="#/graph" data-page="graph"><i class="bi bi-diagram-3"></i> Graph</a></li>
   </ul>
   <div class="sidebar-user">
     <div id="user-label" class="text-light small mb-1">—</div>
@@ -101,6 +102,15 @@
 <main class="container-fluid py-3" style="max-width:1180px;">
   <!-- Stats -->
   <div class="row g-2 mb-3" id="stats"></div>
+
+  <!-- Import/Export -->
+  <div class="d-flex justify-content-end mb-3">
+    <div class="btn-group btn-group-sm">
+      <button class="btn btn-outline-secondary" onclick="doExport()" title="Export all memories as JSONL"><i class="bi bi-download"></i> Export</button>
+      <button class="btn btn-outline-secondary" onclick="document.getElementById('import-file').click()" title="Import memories from JSONL"><i class="bi bi-upload"></i> Import</button>
+    </div>
+    <input type="file" id="import-file" accept=".jsonl,.json,.ndjson" style="display:none" onchange="doImport(event)">
+  </div>
 
   <!-- Controls -->
   <div class="card mb-3">
@@ -124,7 +134,14 @@
         </div>
         <div class="col-6 col-md-3">
           <label class="form-label small text-muted mb-1">Tag</label>
-          <select id="tag" class="form-select form-select-sm"></select>
+          <div class="input-group input-group-sm">
+            <select id="tag" class="form-select form-select-sm"></select>
+            <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" type="button" title="Tag actions"><i class="bi bi-three-dots"></i></button>
+            <ul class="dropdown-menu dropdown-menu-end">
+              <li><a class="dropdown-item" href="#" onclick="tagOpenRename(); return false;"><i class="bi bi-pencil me-1"></i>Rename tag</a></li>
+              <li><a class="dropdown-item text-danger" href="#" onclick="tagOpenDelete(); return false;"><i class="bi bi-trash me-1"></i>Delete tag</a></li>
+            </ul>
+          </div>
         </div>
         <div class="col-6 col-md-3">
           <label class="form-label small text-muted mb-1">Sort</label>
@@ -232,6 +249,10 @@
         <div id="doc-detail-tags" class="mt-3"></div>
       </div>
     </div>
+    <div class="card mb-3" id="doc-rooms-card" style="display:none;">
+      <div class="card-header small text-muted">Linked to rooms</div>
+      <div class="list-group list-group-flush" id="doc-rooms-body"></div>
+    </div>
     <div class="card mb-3" id="doc-memrefs-card" style="display:none;">
       <div class="card-header small text-muted">Referenced by memories</div>
       <div class="list-group list-group-flush" id="doc-memrefs-body"></div>
@@ -278,6 +299,33 @@
         <div id="room-detail-participants" class="mt-2"></div>
       </div>
     </div>
+    <!-- Room search box -->
+    <div class="card mb-3">
+      <div class="card-header small text-muted">Search in room</div>
+      <div class="card-body py-2">
+        <div class="input-group input-group-sm">
+          <input type="text" id="room-search-input" class="form-control" placeholder="Semantic search within this room...">
+          <button class="btn btn-outline-primary" onclick="roomSearch()" type="button"><i class="bi bi-search"></i></button>
+        </div>
+        <div id="room-search-results" class="mt-2" style="display:none;"></div>
+      </div>
+    </div>
+    <!-- Room summary card (lazy-loaded) -->
+    <div class="card mb-3" id="room-summary-card" style="display:none;">
+      <div class="card-header d-flex align-items-center">
+        <span class="small text-muted">Room summary</span>
+        <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="roomLoadSummary(R.currentId)" title="Refresh"><i class="bi bi-arrow-clockwise"></i></button>
+      </div>
+      <div class="card-body" id="room-summary-body"></div>
+    </div>
+    <!-- Room summary document card (lazy-loaded) -->
+    <div class="card mb-3" id="room-summary-doc-card" style="display:none;">
+      <div class="card-header d-flex align-items-center">
+        <span class="small text-muted">Summary document</span>
+        <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="roomLoadSummaryDoc(R.currentId)" title="Refresh"><i class="bi bi-arrow-clockwise"></i></button>
+      </div>
+      <div class="card-body" id="room-summary-doc-body"></div>
+    </div>
     <div class="card mb-3">
       <div class="card-header d-flex align-items-center">
         <span class="small text-muted">Memories in room</span>
@@ -294,6 +342,31 @@
     </div>
   </div>
 </div><!-- /page-rooms -->
+
+<!-- ── Graph page ─────────────────────────────────────────────────────────── -->
+<div id="page-graph" style="display:none;">
+  <main class="container-fluid py-3" style="max-width:1180px;">
+    <div class="d-flex align-items-center mb-3">
+      <h4 class="mb-0">Knowledge Graph</h4>
+      <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="graphLoad()" title="Refresh"><i class="bi bi-arrow-clockwise"></i></button>
+    </div>
+    <div class="card mb-3">
+      <div class="card-body py-2">
+        <div class="row g-2 align-items-center">
+          <div class="col-auto"><span class="small text-muted">Nodes</span> <span class="badge bg-primary" id="graph-stat-nodes">—</span></div>
+          <div class="col-auto"><span class="small text-muted">Edges</span> <span class="badge bg-info" id="graph-stat-edges">—</span></div>
+          <div class="col-auto"><span class="small text-muted">Relations</span> <span class="badge bg-secondary" id="graph-stat-relations">—</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-body p-0">
+        <div id="graph-viz" style="height:600px;"></div>
+        <div id="graph-empty" class="text-center text-muted py-5" style="display:none;">No graph data. Create memories with entities to build the knowledge graph.</div>
+      </div>
+    </div>
+  </main>
+</div><!-- /page-graph -->
 
 <!-- Room create modal -->
 <div class="modal fade" id="m-room-create" tabindex="-1">
@@ -497,6 +570,37 @@
   </div>
 </div>
 
+<!-- Tag rename modal -->
+<div class="modal fade" id="m-tag-rename" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Rename tag</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <div class="mb-3"><label class="form-label">Old name</label><input id="tag-rename-old" class="form-control" readonly></div>
+        <div class="mb-3"><label class="form-label">New name</label><input id="tag-rename-new" class="form-control"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" onclick="tagSubmitRename()"><i class="bi bi-save"></i> Rename</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Tag delete modal -->
+<div class="modal fade" id="m-tag-delete" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title text-danger"><i class="bi bi-exclamation-triangle"></i> Delete tag?</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body"><p>Delete tag <code id="tag-delete-name"></code> from all memories? This cannot be undone.</p></div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-danger" onclick="tagSubmitDelete()"><i class="bi bi-trash"></i> Delete</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="toast-container position-fixed bottom-0 start-50 translate-middle-x p-3">
   <div id="toast" class="toast text-bg-dark" role="alert"><div class="d-flex"><div class="toast-body" id="toast-body"></div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div></div>
 </div>
@@ -505,6 +609,7 @@
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/easymde@2.18.0/dist/easymde.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
 <script>
 const TYPES = ["fact","procedure","preference","decision","context","note","insight","reference","event"];
 let S = { q:"", mode:"list", ns:"", tag:"", sort:"created:desc", offset:0, limit:20, rows:[], hasMore:false };
@@ -527,7 +632,7 @@ function toast(msg){ $("toast-body").textContent = msg; bsModals.toast.show(); }
 
 // ── Bootstrap modal helpers ──────────────────────────────────────────────
 function initModals(){
-  ["m-detail","m-create","m-edit","m-forget"].forEach(id => { bsModals[id] = new bootstrap.Modal(document.getElementById(id)); });
+  ["m-detail","m-create","m-edit","m-forget","m-tag-rename","m-tag-delete"].forEach(id => { bsModals[id] = new bootstrap.Modal(document.getElementById(id)); });
   bsModals.toast = new bootstrap.Toast($("toast"), { delay: 1800 });
 }
 function openModal(id){ bsModals[id].show(); }
@@ -776,16 +881,23 @@ async function openDetail(id){
         <dt class="col-sm-3">Content</dt><dd class="col-sm-9" style="white-space:pre-wrap;word-break:break-word">${esc(m.content)}</dd>
         <dt class="col-sm-3">Type</dt><dd class="col-sm-9"><span class="badge type-badge bg-${typeColor(m.memory_type||"note")}">${esc(m.memory_type||"note")}</span></dd>
         <dt class="col-sm-3">Tags</dt><dd class="col-sm-9">${(m.tags||[]).map(t=>`<span class="badge bg-info text-white me-1">${esc(t)}</span>`).join("") || "—"}</dd>
-        <dt class="col-sm-3">Importance</dt><dd class="col-sm-9"><span class="imp-bar"><span style="width:${Math.round((m.importance??0)*100)}%;background:${impColor(m.importance??0)}"></span></span> ${(m.importance??0).toFixed(2)}</dd>
+        <dt class="col-sm-3">Importance</dt><dd class="col-sm-9"><span class="imp-bar"><span style="width:${Math.round((m.importance??0)*100)}%;background:${impColor(m.importance??0)}"></span></span> <span id="detail-importance-val">${(m.importance??0).toFixed(2)}</span></dd>
         <dt class="col-sm-3">Pinned</dt><dd class="col-sm-9">${m.pinned ? "★ yes" : "no"}</dd>
         <dt class="col-sm-3">Namespace</dt><dd class="col-sm-9">${esc(m.namespace||"—")}</dd>
         <dt class="col-sm-3">Created</dt><dd class="col-sm-9">${fmtDate(m.created_at)}</dd>
         ${m.score!=null ? `<dt class="col-sm-3">Score</dt><dd class="col-sm-9">${m.score.toFixed(3)}</dd>` : ""}
         <dt class="col-sm-3">Documents</dt><dd class="col-sm-9" id="detail-docrefs"><span class="text-muted small">Loading…</span></dd>
+        <dt class="col-sm-3">Feedback</dt><dd class="col-sm-9">
+          <button class="btn btn-sm btn-outline-success me-1" onclick="memFeedback('helpful')"><i class="bi bi-hand-thumbs-up"></i> Helpful</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="memFeedback('unhelpful')"><i class="bi bi-hand-thumbs-down"></i> Unhelpful</button>
+        </dd>
+        <dt class="col-sm-3">Graph</dt><dd class="col-sm-9"><a href="#/graph/${encodeURIComponent(m.id)}" class="text-decoration-none small"><i class="bi bi-diagram-3 me-1"></i>View knowledge graph</a></dd>
+        <dt class="col-sm-3">Timeline</dt><dd class="col-sm-9" id="detail-timeline"><span class="text-muted small">Loading…</span></dd>
       </dl>`;
     openModal("m-detail");
-    // Load doc-refs (optional, non-fatal) — documents referenced via [[slug]].
+    // Load doc-refs + timeline (optional, non-fatal) — in parallel.
     loadDetailDocRefs(m.id);
+    loadDetailTimeline(m.id);
   } catch(e){ toast("Failed: "+e.message); }
 }
 
@@ -801,6 +913,37 @@ async function loadDetailDocRefs(id){
       : "—";
   } catch(_){ dd.innerHTML = "—"; }
 }
+
+// ── Memory feedback (trust scoring) ────────────────────────────────────────
+async function memFeedback(kind){
+  if(!detailMem) return;
+  try {
+    const r = await apiMutate("/dashboard/api/memories/"+encodeURIComponent(detailMem.id)+"/feedback", "POST", { feedback: kind });
+    const newImp = r.importance != null ? r.importance : null;
+    if(newImp != null){
+      const valEl = $("detail-importance-val");
+      if(valEl) valEl.textContent = newImp.toFixed(2);
+    }
+    const delta = r.delta != null ? (r.delta > 0 ? "+" : "") + r.delta.toFixed(2) : "";
+    toast(`Feedback: ${kind} ${delta ? "("+delta+")" : ""}`);
+  } catch(e){ toast("Feedback failed: "+e.message); }
+}
+
+// ── Memory timeline ────────────────────────────────────────────────────────
+async function loadDetailTimeline(id){
+  const dd = $("detail-timeline");
+  if(!dd) return;
+  try {
+    const events = await apiGet("/dashboard/api/memories/"+encodeURIComponent(id)+"/timeline?limit=20");
+    if(!events || !events.length){ dd.innerHTML = "—"; return; }
+    dd.innerHTML = `<div style="max-height:200px;overflow-y:auto">${events.map(e => {
+      const icon = { created:"bi-plus-circle", updated:"bi-pencil", recalled:"bi-search", consolidated:"bi-merge", tagged:"bi-tag", forgot:"bi-trash" }[e.event_type] || "bi-clock";
+      const data = e.event_data ? ` <span class="text-muted">(${esc(e.event_data)})</span>` : "";
+      return `<div class="small mb-1"><i class="bi ${icon} me-1"></i>${esc(e.event_type)} <span class="text-muted">${fmtDate(e.created_at)}</span>${data}</div>`;
+    }).join("")}</div>`;
+  } catch(_){ dd.innerHTML = "—"; }
+}
+
 function editFromDetail(){ if(detailMem){ closeModal("m-detail"); openEdit(detailMem.id); } }
 function forgetFromDetail(){ if(detailMem){ const id=detailMem.id; closeModal("m-detail"); openForget(id, shortId(id)); } }
 
@@ -882,6 +1025,67 @@ async function confirmForget(){
   } catch(e){ toast("Forget failed: "+e.message); }
 }
 
+// ── Tag management (rename / delete) ───────────────────────────────────────
+function tagOpenRename(){
+  const t = $("tag").value;
+  if(!t){ toast("Select a tag first"); return; }
+  $("tag-rename-old").value = t;
+  $("tag-rename-new").value = t;
+  openModal("m-tag-rename");
+}
+async function tagSubmitRename(){
+  const old = $("tag-rename-old").value.trim();
+  const neu = $("tag-rename-new").value.trim();
+  if(!old || !neu){ toast("Both fields required"); return; }
+  if(old === neu){ toast("New name must differ"); return; }
+  const body = { old, new: neu };
+  if(S.ns) body.namespace = S.ns;
+  try {
+    const r = await apiMutate("/dashboard/api/tags/rename", "POST", body);
+    closeModal("m-tag-rename");
+    toast(`Renamed: ${r.count || 0} memories updated`);
+    loadTags(); loadStats(); load();
+  } catch(e){ toast("Rename failed: "+e.message); }
+}
+function tagOpenDelete(){
+  const t = $("tag").value;
+  if(!t){ toast("Select a tag first"); return; }
+  $("tag-delete-name").textContent = t;
+  openModal("m-tag-delete");
+}
+async function tagSubmitDelete(){
+  const tag = $("tag-delete-name").textContent;
+  if(!tag) return;
+  const qs = S.ns ? "?namespace="+encodeURIComponent(S.ns) : "";
+  try {
+    const r = await apiMutate("/dashboard/api/tags/"+encodeURIComponent(tag)+qs, "DELETE");
+    closeModal("m-tag-delete");
+    toast(`Deleted: ${r.count || 0} memories affected`);
+    $("tag").value = ""; S.tag = "";
+    loadTags(); loadStats(); load();
+  } catch(e){ toast("Delete failed: "+e.message); }
+}
+
+// ── Import / Export ────────────────────────────────────────────────────────
+function doExport(){
+  const qs = S.ns ? "?namespace="+encodeURIComponent(S.ns) : "";
+  window.open("/dashboard/api/export"+qs, "_blank");
+}
+async function doImport(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  if(file.size > 5*1024*1024){ toast("File too large (max 5MB)"); event.target.value = ""; return; }
+  try {
+    const content = await file.text();
+    const body = { content };
+    if(S.ns) body.namespace = S.ns;
+    const r = await apiMutate("/dashboard/api/import", "POST", body);
+    toast(`Imported: ${r.imported || 0}, skipped: ${r.skipped || 0}`);
+    loadStats(); load();
+  } catch(e){ toast("Import failed: "+e.message); }
+  event.target.value = "";
+}
+
 async function logout(){
   await fetch("/dashboard/logout",{method:"POST",headers:{"X-CSRF-Token":getCSRF()}});
   window.location.href = "/dashboard";
@@ -914,6 +1118,7 @@ function showPage(name){
   document.getElementById("page-memories").style.display = name === "memories" ? "" : "none";
   document.getElementById("page-docs").style.display = name === "documents" ? "" : "none";
   document.getElementById("page-rooms").style.display = name === "rooms" ? "" : "none";
+  document.getElementById("page-graph").style.display = name === "graph" ? "" : "none";
   document.querySelectorAll(".sidebar .nav-link").forEach(t => t.classList.toggle("active", t.dataset.page === name));
 }
 function toggleSidebar(){
@@ -945,6 +1150,9 @@ function routeHash(){
   } else if(h.startsWith("/rooms")){
     showPage("rooms");
     roomShowList();
+  } else if(h.startsWith("/graph")){
+    showPage("graph");
+    graphLoad();
   } else {
     showPage("memories");
   }
@@ -1063,8 +1271,8 @@ async function docShowDetail(slug){
         document.getElementById("doc-children-card").style.display = "none";
       }
     } catch(_){ document.getElementById("doc-children-card").style.display = "none"; }
-    // Load mem-refs (optional, non-fatal) — fetch each memory detail in
-    // parallel and render as a list (content preview + type + importance).
+    // Load rooms & mem-refs (optional, non-fatal) — in parallel.
+    loadDocRooms(slug);
     loadDocMemRefs(slug);
   } catch(e){
     toast("Failed to load document: "+e.message);
@@ -1076,6 +1284,23 @@ function docBackToList(){
   document.getElementById("docs-list-view").style.display = "";
   D.currentSlug = null;
   if(window.location.hash !== "#/documents") window.location.hash = "#/documents";
+}
+
+// Fetch rooms linked to a document and render them as links.
+// Empty or error → hide the card (non-fatal).
+async function loadDocRooms(slug){
+  const card = document.getElementById("doc-rooms-card");
+  const body = document.getElementById("doc-rooms-body");
+  try {
+    const data = await apiGet("/dashboard/api/documents/"+encodeURIComponent(slug)+"/rooms");
+    const roomIds = (data && data.room_ids) || [];
+    if(!roomIds.length){ card.style.display = "none"; return; }
+    card.style.display = "";
+    body.innerHTML = roomIds.map(rid => `
+      <a href="#/rooms/${encodeURIComponent(rid)}" class="list-group-item list-group-item-action">
+        <i class="bi bi-chat-dots me-1"></i>${esc(rid)}
+      </a>`).join("");
+  } catch(_){ card.style.display = "none"; }
 }
 
 // Fetch memories referencing a document and render them as a list.
@@ -1360,6 +1585,13 @@ async function roomShowDetail(id){
     roomRenderMemories(memories || []);
     // Documents list.
     roomRenderDocs(docSlugs);
+    // Reset search.
+    $("room-search-input").value = "";
+    $("room-search-results").style.display = "none";
+    $("room-search-results").innerHTML = "";
+    // Lazy-load summary & summary-document (non-fatal).
+    roomLoadSummary(id);
+    roomLoadSummaryDoc(id);
   } catch(e){
     toast("Failed to load room: "+e.message);
     roomBackToList();
@@ -1398,6 +1630,132 @@ function roomRenderDocs(slugs){
       <button class="btn btn-sm btn-outline-danger ms-auto py-0 px-1" onclick="roomUnlinkDoc('${esc(s)}')" title="Unlink"><i class="bi bi-x-lg"></i></button>
     </div>`).join("");
 }
+
+// ── Rooms: summary, summary-document, search ───────────────────────────────
+async function roomLoadSummary(id){
+  if(!id) return;
+  const card = $("room-summary-card");
+  const body = $("room-summary-body");
+  card.style.display = "";
+  body.innerHTML = '<span class="text-muted small">Loading…</span>';
+  try {
+    const s = await apiGet("/dashboard/api/rooms/"+encodeURIComponent(id)+"/summary");
+    if(!s || s.total_memories === 0){
+      card.style.display = "none";
+      return;
+    }
+    let html = '';
+    // Time range
+    if(s.time_range){
+      html += `<div class="small text-muted mb-2"><i class="bi bi-calendar3 me-1"></i>${esc(fmtDate(s.time_range.earliest))} — ${esc(fmtDate(s.time_range.latest))}</div>`;
+    }
+    // Stats row
+    html += `<div class="d-flex gap-3 mb-2 small">
+      <span><strong>${s.total_memories}</strong> memories</span>
+      <span><strong>${(s.participants||[]).length}</strong> participants</span>
+    </div>`;
+    // Pinned highlights
+    if(s.pinned_highlights && s.pinned_highlights.length){
+      html += `<div class="mb-2"><span class="badge bg-warning text-dark me-1">★ Pinned</span></div>`;
+      html += `<ul class="small ps-3 mb-2">${s.pinned_highlights.map(h => `<li>${esc(h)}</li>`).join("")}</ul>`;
+    }
+    // Recent decisions
+    if(s.recent_decisions && s.recent_decisions.length){
+      html += `<div class="mb-2"><span class="badge bg-info text-white me-1">Recent decisions</span></div>`;
+      html += `<ul class="small ps-3 mb-2">${s.recent_decisions.map(d => `<li>${esc(d)}</li>`).join("")}</ul>`;
+    }
+    // Topic clusters
+    if(s.clusters && s.clusters.length){
+      html += `<div class="mb-2"><span class="badge bg-secondary me-1">Topic clusters</span></div>`;
+      html += `<div class="ps-2">`;
+      s.clusters.forEach((c, i) => {
+        html += `<div class="mb-2 p-2 border rounded">
+          <div class="d-flex align-items-center mb-1">
+            <span class="badge bg-primary me-1">#${i+1}</span>
+            <strong>${esc(c.topic)}</strong>
+            <span class="text-muted small ms-auto">${c.memory_count} memories · score ${c.score.toFixed(2)}</span>
+          </div>
+          ${c.tags && c.tags.length ? `<div class="mb-1">${c.tags.map(t => `<span class="badge bg-light text-dark border me-1">${esc(t)}</span>`).join("")}</div>` : ""}
+          ${c.top_memories && c.top_memories.length ? `<ul class="small ps-3 mb-0">${c.top_memories.slice(0,3).map(m => `<li>${esc(truncSentences(m, 1))}</li>`).join("")}</ul>` : ""}
+        </div>`;
+      });
+      html += `</div>`;
+    }
+    // Top tags
+    if(s.top_tags && s.top_tags.length){
+      html += `<div class="mb-2"><span class="badge bg-secondary me-1">Top tags</span></div>`;
+      html += `<div>${s.top_tags.slice(0,15).map(t => `<span class="badge bg-light text-dark border me-1 mb-1">${esc(t.name||t.tag||t)} (${t.count||1})</span>`).join("")}</div>`;
+    }
+    body.innerHTML = html || '<span class="text-muted small">No summary data.</span>';
+  } catch(_){
+    card.style.display = "none";
+  }
+}
+
+async function roomLoadSummaryDoc(id){
+  if(!id) return;
+  const card = $("room-summary-doc-card");
+  const body = $("room-summary-doc-body");
+  card.style.display = "";
+  body.innerHTML = '<span class="text-muted small">Loading…</span>';
+  try {
+    const d = await apiGet("/dashboard/api/rooms/"+encodeURIComponent(id)+"/summary-document");
+    if(!d || !d.sections || !d.sections.length){
+      card.style.display = "none";
+      return;
+    }
+    let html = '';
+    if(d.generated_at){
+      html += `<div class="small text-muted mb-2">Generated ${esc(fmtDate(d.generated_at))}</div>`;
+    }
+    d.sections.forEach(sec => {
+      html += `<div class="mb-3">
+        <h6 class="mb-1">${esc(sec.icon||"")} ${esc(sec.heading)}</h6>
+        <div class="ps-2">`;
+      sec.entries.forEach(e => {
+        html += `<div class="mb-2 p-2 border rounded">
+          <div class="trunc small">${esc(e.content)}</div>
+          <div class="d-flex align-items-center gap-2 mt-1">
+            <span class="text-muted small"><i class="bi bi-person me-1"></i>${esc(e.author||"—")}</span>
+            <span class="text-muted small">${esc(fmtDate(e.created_at))}</span>
+            ${(e.tags||[]).length ? `<span>${e.tags.map(t => `<span class="badge bg-light text-dark border me-1">${esc(t)}</span>`).join("")}</span>` : ""}
+          </div>
+        </div>`;
+      });
+      html += `</div></div>`;
+    });
+    body.innerHTML = html;
+  } catch(_){
+    card.style.display = "none";
+  }
+}
+
+async function roomSearch(){
+  const q = $("room-search-input").value.trim();
+  const results = $("room-search-results");
+  if(!q){ results.style.display = "none"; results.innerHTML = ""; return; }
+  results.style.display = "";
+  results.innerHTML = '<span class="text-muted small">Searching…</span>';
+  try {
+    const data = await apiGet("/dashboard/api/rooms/"+encodeURIComponent(R.currentId)+"/recall?q="+encodeURIComponent(q)+"&limit=10");
+    const mems = Array.isArray(data) ? data : (data.memories || []);
+    if(!mems.length){
+      results.innerHTML = '<span class="text-muted small">No results.</span>';
+      return;
+    }
+    results.innerHTML = mems.map(m => {
+      const score = m.score != null ? ` <span class="text-muted small">score ${m.score.toFixed(3)}</span>` : "";
+      return `<div class="border rounded p-2 mb-1 cursor-pointer" onclick="openDetail('${esc(m.id)}')">
+        <div class="trunc small">${esc(truncSentences(m.content, 2))}</div>
+        <div class="d-flex align-items-center gap-2 mt-1">
+          <span class="badge type-badge bg-${typeColor(m.memory_type||"note")}">${esc(m.memory_type||"note")}</span>
+          ${score}
+        </div>
+      </div>`;
+    }).join("");
+  } catch(e){ results.innerHTML = `<span class="text-danger small">Search failed: ${esc(e.message)}</span>`; }
+}
+
 function roomBackToList(){
   document.getElementById("rooms-detail-view").style.display = "none";
   document.getElementById("rooms-list-view").style.display = "";
@@ -1514,6 +1872,57 @@ function initDocs(){
 }
 initDocs();
 initRooms();
+
+// ── Graph visualization (vis.js) ───────────────────────────────────────────
+let graphNetwork = null;
+async function graphLoad(){
+  const container = $("graph-viz");
+  const empty = $("graph-empty");
+  if(!container) return;
+  container.style.display = "";
+  empty.style.display = "none";
+  try {
+    // Use any memory ID — the graph endpoint returns the full graph.
+    // We use a dummy ID since the backend ignores it for /graph.
+    const data = await apiGet("/dashboard/api/memories/00000000-0000-0000-0000-000000000000/graph");
+    const nodes = (data.nodes || []).map(n => ({
+      id: n.id,
+      label: n.label || n.id.slice(0, 8),
+      title: n.entity_type ? `${n.entity_type}: ${n.label}` : n.label,
+      group: n.entity_type || "default",
+    }));
+    const edges = (data.edges || []).map(e => ({
+      from: e.source_id,
+      to: e.target_id,
+      label: e.relation,
+      arrows: "to",
+      width: Math.max(1, e.weight || 1),
+    }));
+    // Stats
+    $("graph-stat-nodes").textContent = (data.stats && data.stats.node_count) || nodes.length;
+    $("graph-stat-edges").textContent = (data.stats && data.stats.edge_count) || edges.length;
+    $("graph-stat-relations").textContent = (data.stats && data.stats.relation_types && data.stats.relation_types.length) || 0;
+    if(!nodes.length){
+      container.style.display = "none";
+      empty.style.display = "";
+      return;
+    }
+    const visData = { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) };
+    const options = {
+      nodes: { shape: "dot", size: 16, font: { size: 12 } },
+      edges: { font: { size: 10, align: "middle" }, smooth: { type: "continuous" } },
+      physics: { stabilization: { iterations: 100 }, barnesHut: { gravitationalConstant: -2000 } },
+      interaction: { hover: true, tooltipDelay: 200 },
+    };
+    if(graphNetwork) graphNetwork.destroy();
+    graphNetwork = new vis.Network(container, visData, options);
+  } catch(e){
+    container.style.display = "none";
+    empty.style.display = "";
+    empty.textContent = "Failed to load graph: " + e.message;
+  }
+}
+
 routeHash();
 </script>
 </div><!-- /main-wrapper -->

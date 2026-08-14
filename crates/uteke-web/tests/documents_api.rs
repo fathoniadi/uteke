@@ -87,6 +87,12 @@ async fn spawn_doc_upstream() -> std::net::SocketAddr {
             r#"{"doc_slug":"deploy-runbook","memory_ids":["m1","m2"]}"#.to_string(),
         )
     }
+    async fn doc_room_list(_b: String) -> impl IntoResponse {
+        (
+            StatusCode::OK,
+            r#"{"doc_slug":"deploy-runbook","room_ids":["room-1","room-2"]}"#.to_string(),
+        )
+    }
 
     let app = axum::Router::new()
         .route("/doc/list", post(doc_list))
@@ -96,7 +102,8 @@ async fn spawn_doc_upstream() -> std::net::SocketAddr {
         .route("/doc/update", post(doc_update))
         .route("/doc/move", post(doc_move))
         .route("/doc/delete", delete(doc_delete))
-        .route("/doc/mem-refs", post(doc_mem_refs));
+        .route("/doc/mem-refs", post(doc_mem_refs))
+        .route("/doc/room/list", post(doc_room_list));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -718,4 +725,47 @@ async fn doc_move_to_root_with_empty_parent() {
     assert_eq!(resp.status(), StatusCode::OK);
     let json = read_json(resp).await;
     assert_eq!(json["moved"], 1);
+}
+
+// ── Document rooms tests ────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn doc_rooms_requires_session() {
+    let app = TestApp::new().await;
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/documents/deploy-runbook/rooms")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn doc_rooms_returns_room_ids() {
+    let upstream = spawn_doc_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/documents/deploy-runbook/rooms")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert_eq!(json["doc_slug"], "deploy-runbook");
+    assert_eq!(json["room_ids"][0], "room-1");
+    assert_eq!(json["room_ids"][1], "room-2");
 }

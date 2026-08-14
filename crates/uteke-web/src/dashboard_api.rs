@@ -1882,6 +1882,532 @@ pub async fn handle_unlink_room_document(
     Json(val).into_response()
 }
 
+// ── Room summary & recall (Tier 1) ──────────────────────────────────────────
+
+/// `GET /dashboard/api/rooms/{id}/summary` — topic clusters & overview.
+/// Wraps upstream `POST /room/summary`. Returns RoomSummary JSON.
+pub async fn handle_room_summary(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let client = UtekeClient::new(&state);
+    let body = serde_json::json!({ "room_id": id });
+    let resp = match client.post("/room/summary", &body).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+/// `GET /dashboard/api/rooms/{id}/summary-document` — structured meeting minutes.
+/// Wraps upstream `POST /room/summary-document`. Returns RoomDocument JSON.
+pub async fn handle_room_summary_document(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let client = UtekeClient::new(&state);
+    let body = serde_json::json!({ "room_id": id });
+    let resp = match client.post("/room/summary-document", &body).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+/// `GET /dashboard/api/rooms/{id}/recall` query params.
+#[derive(Debug, Deserialize)]
+pub struct RoomRecallQuery {
+    #[serde(default)]
+    pub q: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub author: Option<String>,
+}
+
+/// `GET /dashboard/api/rooms/{id}/recall` — semantic search within a room.
+/// Wraps upstream `POST /room/recall`. Empty query falls back to chronological.
+pub async fn handle_room_recall(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<RoomRecallQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let limit = q.limit.unwrap_or(DEFAULT_PAGE_LIMIT).min(MAX_PAGE_LIMIT);
+    let payload = serde_json::json!({
+        "room_id": id,
+        "query": q.q,
+        "limit": limit,
+        "author": q.author,
+    });
+    let client = UtekeClient::new(&state);
+    let resp = match client.post("/room/recall", &payload).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+// ── Memory feedback, graph, timeline (Tier 1) ───────────────────────────────
+
+/// `POST /dashboard/api/memories/{id}/feedback` body.
+#[derive(Debug, Deserialize)]
+pub struct MemoryFeedbackRequest {
+    /// "helpful" or "unhelpful"
+    pub feedback: String,
+}
+
+/// `POST /dashboard/api/memories/{id}/feedback` — trust scoring feedback.
+/// Wraps upstream `POST /memory/feedback`. Requires session + CSRF.
+pub async fn handle_memory_feedback(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let req: MemoryFeedbackRequest = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return api_error(StatusCode::BAD_REQUEST, &format!("invalid body: {e}")),
+    };
+    let feedback = req.feedback.trim().to_lowercase();
+    if feedback != "helpful" && feedback != "unhelpful" {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "feedback must be 'helpful' or 'unhelpful'",
+        );
+    }
+    let payload = serde_json::json!({ "id": id, "feedback": feedback });
+    let client = UtekeClient::new(&state);
+    let resp = match client.post("/memory/feedback", &payload).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+/// `GET /dashboard/api/memories/{id}/graph` — full knowledge graph.
+/// Wraps upstream `GET /graph` (returns all nodes + edges + stats).
+/// The frontend renders this with vis.js for full graph visualization.
+pub async fn handle_memory_graph(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    // Fetch the full graph — the frontend will highlight the node for this
+    // memory. The `id` path param is used by the UI to center the view.
+    let _ = &id; // validated by upstream when UI requests node details
+    let client = UtekeClient::new(&state);
+    let resp = match client.get("/graph").await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+/// `POST /dashboard/api/memories/{id}/edges` body.
+#[derive(Debug, Deserialize)]
+pub struct AddEdgeRequest {
+    pub target: String,
+    #[serde(default)]
+    pub edge_type: Option<String>,
+    #[serde(default)]
+    pub weight: Option<f64>,
+}
+
+/// `POST /dashboard/api/memories/{id}/edges` — add a graph edge.
+/// Wraps upstream `POST /graph/edge`. Requires session + CSRF.
+pub async fn handle_memory_edges_add(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let req: AddEdgeRequest = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return api_error(StatusCode::BAD_REQUEST, &format!("invalid body: {e}")),
+    };
+    if req.target.trim().is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "target must not be empty");
+    }
+    if req.target == id {
+        return api_error(StatusCode::BAD_REQUEST, "self-loop edges are not allowed");
+    }
+    let payload = serde_json::json!({
+        "source": id,
+        "target": req.target,
+        "edge_type": req.edge_type,
+        "weight": req.weight,
+    });
+    let client = UtekeClient::new(&state);
+    let resp = match client.post("/graph/edge", &payload).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+/// `DELETE /dashboard/api/memories/{id}/edges?target=...` — remove a graph edge.
+/// Wraps upstream `DELETE /graph/edge?source=...&target=...`. Requires session + CSRF.
+pub async fn handle_memory_edges_remove(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let target = match params.get("target") {
+        Some(t) if !t.is_empty() => t,
+        _ => return api_error(StatusCode::BAD_REQUEST, "target query parameter required"),
+    };
+    let path = format!(
+        "/graph/edge?source={}&target={}",
+        urlencoding::encode(&id),
+        urlencoding::encode(target)
+    );
+    let client = UtekeClient::new(&state);
+    let resp = match client.delete(&path).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+/// `GET /dashboard/api/memories/{id}/timeline` query params.
+#[derive(Debug, Deserialize)]
+pub struct TimelineQuery {
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// `GET /dashboard/api/memories/{id}/timeline` — event history for a memory.
+/// Wraps upstream `GET /timeline?id=...&limit=...`.
+pub async fn handle_memory_timeline(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<TimelineQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let limit = q.limit.unwrap_or(50).min(MAX_PAGE_LIMIT);
+    let path = format!("/timeline?id={}&limit={}", urlencoding::encode(&id), limit);
+    let client = UtekeClient::new(&state);
+    let resp = match client.get(&path).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+// ── Tags management (Tier 1) ────────────────────────────────────────────────
+
+/// `POST /dashboard/api/tags/rename` body.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TagRenameRequest {
+    pub old: String,
+    pub new: String,
+    #[serde(default)]
+    pub namespace: Option<String>,
+}
+
+/// `POST /dashboard/api/tags/rename` — rename a tag across all memories.
+/// Wraps upstream `POST /tags/rename`. Requires session + CSRF.
+pub async fn handle_tag_rename(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let req: TagRenameRequest = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return api_error(StatusCode::BAD_REQUEST, &format!("invalid body: {e}")),
+    };
+    if req.old.trim().is_empty() || req.new.trim().is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "old and new must not be empty");
+    }
+    let client = UtekeClient::new(&state);
+    let resp = match client.post("/tags/rename", &req).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+/// `DELETE /dashboard/api/tags/{tag}` — delete a tag from all memories.
+/// Wraps upstream `POST /tags/delete` (RESTful → POST translator). Requires session + CSRF.
+pub async fn handle_tag_delete(
+    State(state): State<AppState>,
+    Path(tag): Path<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let namespace = params.get("namespace").cloned();
+    let payload = serde_json::json!({ "tag": tag, "namespace": namespace });
+    let client = UtekeClient::new(&state);
+    let resp = match client.post("/tags/delete", &payload).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+// ── Import / Export (Tier 1) ────────────────────────────────────────────────
+
+/// `GET /dashboard/api/export` query params.
+#[derive(Debug, Deserialize)]
+pub struct ExportQuery {
+    #[serde(default)]
+    pub namespace: Option<String>,
+}
+
+/// `GET /dashboard/api/export` — download all memories as JSONL.
+/// Wraps upstream `GET /export`. Returns raw JSONL with Content-Disposition.
+pub async fn handle_export(
+    State(state): State<AppState>,
+    Query(q): Query<ExportQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let path = match q.namespace.as_deref().filter(|n| !n.is_empty()) {
+        Some(ns) => format!("/export?namespace={}", urlencoding::encode(ns)),
+        None => "/export".to_string(),
+    };
+    let client = UtekeClient::new(&state);
+    let resp = match client.get(&path).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        let code =
+            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        return api_error(code, &body);
+    }
+    let bytes = match resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => return upstream_err(e),
+    };
+    // Return raw JSONL with download headers.
+    let mut headers_out = HeaderMap::new();
+    headers_out.insert(
+        axum::http::header::CONTENT_TYPE,
+        "application/x-ndjson".parse().unwrap(),
+    );
+    headers_out.insert(
+        axum::http::header::CONTENT_DISPOSITION,
+        "attachment; filename=\"uteke-export.jsonl\""
+            .parse()
+            .unwrap(),
+    );
+    (StatusCode::OK, headers_out, bytes).into_response()
+}
+
+/// `POST /dashboard/api/import` body.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ImportRequest {
+    /// JSONL content to import.
+    pub content: String,
+    #[serde(default)]
+    pub namespace: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+/// `POST /dashboard/api/import` — import memories from JSONL.
+/// Wraps upstream `POST /import`. Requires session + CSRF.
+pub async fn handle_import(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let req: ImportRequest = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return api_error(StatusCode::BAD_REQUEST, &format!("invalid body: {e}")),
+    };
+    if req.content.trim().is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "content must not be empty");
+    }
+    let client = UtekeClient::new(&state);
+    let resp = match client.post("/import", &req).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+// ── Document rooms (Tier 1) ─────────────────────────────────────────────────
+
+/// `GET /dashboard/api/documents/{slug}/rooms` — list rooms linked to a document.
+/// Wraps upstream `POST /doc/room/list`.
+pub async fn handle_document_rooms(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let body = serde_json::json!({ "doc_slug": slug });
+    let client = UtekeClient::new(&state);
+    let resp = match client.post("/doc/room/list", &body).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

@@ -383,10 +383,20 @@ The dashboard SPA talks to a clean REST contract owned by `uteke-web`; the brows
 | `POST` | `/dashboard/api/memories` | Create (`{content, tags, namespace?, memory_type?}`) |
 | `PUT` | `/dashboard/api/memories/{id}` | Edit (`{content?, tags?, memory_type?, importance?, pinned?}`) |
 | `DELETE` | `/dashboard/api/memories/{id}` | Forget (soft-delete) |
+| `GET` | `/dashboard/api/memories/{id}/doc-refs` | Documents referenced by memory |
+| `POST` | `/dashboard/api/memories/{id}/feedback` | Trust scoring feedback (`{feedback: "helpful"\|"unhelpful"}`) — CSRF |
+| `GET` | `/dashboard/api/memories/{id}/graph` | Full knowledge graph (nodes + edges + stats) |
+| `POST` | `/dashboard/api/memories/{id}/edges` | Add graph edge (`{target, edge_type?, weight?}`) — CSRF |
+| `DELETE` | `/dashboard/api/memories/{id}/edges?target=...` | Remove graph edge — CSRF |
+| `GET` | `/dashboard/api/memories/{id}/timeline` | Event history (`?limit=50`) |
 | `GET` | `/dashboard/api/tags` | Tag list with counts (`?namespace=`) |
+| `POST` | `/dashboard/api/tags/rename` | Rename tag (`{old, new, namespace?}`) — CSRF |
+| `DELETE` | `/dashboard/api/tags/{tag}` | Delete tag (`?namespace=`) — CSRF |
 | `GET` | `/dashboard/api/namespaces` | Namespace list |
 | `GET` | `/dashboard/api/stats` | Store stats (`?namespace=`) |
 | `GET` | `/dashboard/api/profile` | Current user (from session, no upstream call) |
+| `GET` | `/dashboard/api/export` | Export all memories as JSONL (`?namespace=`) |
+| `POST` | `/dashboard/api/import` | Import JSONL (`{content, namespace?, tags?}`) — CSRF |
 
 `memory_type` is validated against the fixed taxonomy: `fact`, `procedure`, `preference`, `decision`, `context`, `note`, `insight`, `reference`, `event`. Invalid values are dropped.
 
@@ -398,6 +408,7 @@ The dashboard SPA talks to a clean REST contract owned by `uteke-web`; the brows
 | `GET` | `/dashboard/api/documents/search` | Search (`?q=&mode=hybrid\|semantic\|fts&limit=`) |
 | `GET` | `/dashboard/api/documents/{slug}` | Document detail |
 | `GET` | `/dashboard/api/documents/{slug}/mem-refs` | Memories referencing this document |
+| `GET` | `/dashboard/api/documents/{slug}/rooms` | Rooms linked to this document |
 | `POST` | `/dashboard/api/documents` | Create — body `{content, title?, tags?, parent?}`. **`slug` is auto-generated** from `title` (or first Markdown heading in `content`) per the uteke naming convention. A client-supplied `slug` field is accepted but ignored. |
 | `PUT` | `/dashboard/api/documents/{slug}` | Partial update (`{title?, content?, tags?}`) |
 | `DELETE` | `/dashboard/api/documents/{slug}` | Delete + cascade to children/chunks |
@@ -416,6 +427,9 @@ The dashboard SPA talks to a clean REST contract owned by `uteke-web`; the brows
 | `GET` | `/dashboard/api/rooms/{id}/documents` | List documents linked to room |
 | `POST` | `/dashboard/api/rooms/{id}/documents` | Link document (`{doc_slug}`) |
 | `DELETE` | `/dashboard/api/rooms/{id}/documents` | Unlink document (`{doc_slug}`) |
+| `GET` | `/dashboard/api/rooms/{id}/summary` | Topic clusters & overview |
+| `GET` | `/dashboard/api/rooms/{id}/summary-document` | Structured meeting minutes |
+| `GET` | `/dashboard/api/rooms/{id}/recall` | Semantic search in room (`?q=&limit=&author=`) |
 
 **Slug / room_id naming convention:** `escaped_title + "-" + random_suffix` where `escaped_title` = lowercase(title) → replace spaces & periods with `-` → strip non-alphanumeric (dashes preserved) → trim leading/trailing dashes. `random_suffix` = 6 alphanumeric characters (a-z0-9). The server collision-checks against the store before insert and regenerates the suffix on conflict (up to 5 retries).
 

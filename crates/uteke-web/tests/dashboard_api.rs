@@ -91,6 +91,52 @@ async fn spawn_typed_upstream() -> std::net::SocketAddr {
             r#"{"total_memories":42,"unique_tags":5,"db_size_bytes":1024,"hot":3,"warm":7,"cold":32,"cache_hits":10,"cache_misses":20,"total_documents":3}"#,
         )
     }
+    async fn memory_feedback(_b: String) -> impl IntoResponse {
+        (
+            StatusCode::OK,
+            r#"{"id":"m1","feedback":"helpful","delta":0.05,"importance":0.75}"#.to_string(),
+        )
+    }
+    async fn graph(Query(_q): Query<HashMap<String, String>>) -> impl IntoResponse {
+        (
+            StatusCode::OK,
+            r#"{"nodes":[{"id":"n1","label":"Entity1","entity_type":"person","properties":{},"memory_id":"m1","created_at":"2026-01-01T00:00:00Z"}],"edges":[{"id":"e1","source_id":"n1","target_id":"n2","relation":"related_to","weight":1.0,"created_at":"2026-01-01T00:00:00Z"}],"stats":{"node_count":1,"edge_count":1,"relation_types":["related_to"]}}"#.to_string(),
+        )
+    }
+    async fn graph_edge(_b: String) -> impl IntoResponse {
+        (StatusCode::OK, r#"{"ok":true}"#.to_string())
+    }
+    async fn graph_edge_delete(Query(_q): Query<HashMap<String, String>>) -> impl IntoResponse {
+        (StatusCode::OK, r#"{"ok":true}"#.to_string())
+    }
+    async fn timeline(Query(_q): Query<HashMap<String, String>>) -> impl IntoResponse {
+        (
+            StatusCode::OK,
+            r#"[{"id":1,"memory_id":"m1","event_type":"created","event_data":null,"created_at":"2026-01-01T00:00:00Z"}]"#.to_string(),
+        )
+    }
+    async fn tags_rename(_b: String) -> impl IntoResponse {
+        (
+            StatusCode::OK,
+            r#"{"renamed":true,"count":3,"old":"foo","new":"bar"}"#.to_string(),
+        )
+    }
+    async fn tags_delete(_b: String) -> impl IntoResponse {
+        (
+            StatusCode::OK,
+            r#"{"deleted":true,"count":3,"tag":"foo"}"#.to_string(),
+        )
+    }
+    async fn export(Query(_q): Query<HashMap<String, String>>) -> impl IntoResponse {
+        (
+            StatusCode::OK,
+            [("content-type", "application/x-ndjson")],
+            r#"{"id":"m1","content":"hello"}"#.to_string(),
+        )
+    }
+    async fn import(_b: String) -> impl IntoResponse {
+        (StatusCode::OK, r#"{"imported":1,"skipped":0}"#.to_string())
+    }
 
     let app = axum::Router::new()
         .route("/list", post(list))
@@ -101,7 +147,15 @@ async fn spawn_typed_upstream() -> std::net::SocketAddr {
         .route("/forget", delete(forget))
         .route("/tags", get(tags))
         .route("/namespaces", get(namespaces))
-        .route("/stats", get(stats));
+        .route("/stats", get(stats))
+        .route("/memory/feedback", post(memory_feedback))
+        .route("/graph", get(graph))
+        .route("/graph/edge", post(graph_edge).delete(graph_edge_delete))
+        .route("/timeline", get(timeline))
+        .route("/tags/rename", post(tags_rename))
+        .route("/tags/delete", post(tags_delete))
+        .route("/export", get(export))
+        .route("/import", post(import));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -499,4 +553,346 @@ async fn empty_query_in_semantic_mode_falls_back_to_list() {
     let json = read_json(resp).await;
     // Falls back to list mode (no score).
     assert_eq!(json["mode"], "list");
+}
+
+// ── Memory feedback tests ───────────────────────────────────────────────────
+
+#[tokio::test]
+async fn memory_feedback_requires_csrf() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/dashboard/api/memories/m1/feedback")
+                .header("cookie", &cookie)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"feedback":"helpful"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn memory_feedback_returns_updated_importance() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/dashboard/api/memories/m1/feedback")
+                .header("cookie", &cookie)
+                .header("x-csrf-token", &csrf)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"feedback":"helpful"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert_eq!(json["feedback"], "helpful");
+    assert_eq!(json["delta"], 0.05);
+    assert_eq!(json["importance"], 0.75);
+}
+
+#[tokio::test]
+async fn memory_feedback_rejects_invalid_feedback() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/dashboard/api/memories/m1/feedback")
+                .header("cookie", &cookie)
+                .header("x-csrf-token", &csrf)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"feedback":"bogus"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+// ── Memory graph & timeline tests ───────────────────────────────────────────
+
+#[tokio::test]
+async fn memory_graph_returns_nodes_edges() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/memories/m1/graph")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert!(json["nodes"].is_array());
+    assert!(json["edges"].is_array());
+    assert_eq!(json["stats"]["node_count"], 1);
+}
+
+#[tokio::test]
+async fn memory_timeline_returns_events() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/memories/m1/timeline?limit=10")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert!(json.is_array());
+    assert!(!json.as_array().unwrap().is_empty());
+    assert_eq!(json[0]["event_type"], "created");
+}
+
+#[tokio::test]
+async fn memory_edges_add_requires_csrf() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/dashboard/api/memories/m1/edges")
+                .header("cookie", &cookie)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"target":"m2"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn memory_edges_add_rejects_self_loop() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/dashboard/api/memories/m1/edges")
+                .header("cookie", &cookie)
+                .header("x-csrf-token", &csrf)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"target":"m1"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+// ── Tag rename/delete tests ─────────────────────────────────────────────────
+
+#[tokio::test]
+async fn tag_rename_requires_csrf() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/dashboard/api/tags/rename")
+                .header("cookie", &cookie)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"old":"foo","new":"bar"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn tag_rename_returns_count() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/dashboard/api/tags/rename")
+                .header("cookie", &cookie)
+                .header("x-csrf-token", &csrf)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"old":"foo","new":"bar"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert_eq!(json["renamed"], true);
+    assert_eq!(json["count"], 3);
+}
+
+#[tokio::test]
+async fn tag_delete_requires_csrf() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri("/dashboard/api/tags/foo")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn tag_delete_returns_count() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri("/dashboard/api/tags/foo")
+                .header("cookie", &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert_eq!(json["deleted"], true);
+    assert_eq!(json["count"], 3);
+}
+
+// ── Import/Export tests ─────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn export_returns_jsonl() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/export")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert_eq!(ct, "application/x-ndjson");
+}
+
+#[tokio::test]
+async fn import_requires_csrf() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/dashboard/api/import")
+                .header("cookie", &cookie)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"content":"{\"id\":\"m1\"}"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn import_returns_counts() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/dashboard/api/import")
+                .header("cookie", &cookie)
+                .header("x-csrf-token", &csrf)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"content":"{\"id\":\"m1\"}"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert_eq!(json["imported"], 1);
+    assert_eq!(json["skipped"], 0);
 }

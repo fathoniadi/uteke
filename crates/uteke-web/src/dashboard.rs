@@ -12,7 +12,7 @@
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Json, Redirect, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use serde::Deserialize;
 
 use crate::session;
@@ -108,6 +108,55 @@ pub fn dashboard_router() -> axum::Router<AppState> {
             get(dashboard_api::handle_list_room_documents)
                 .post(dashboard_api::handle_link_room_document)
                 .delete(dashboard_api::handle_unlink_room_document),
+        )
+        // Room summary & recall (Tier 1) — wrap upstream `/room/summary`,
+        // `/room/summary-document`, `/room/recall`.
+        .route(
+            "/dashboard/api/rooms/{id}/summary",
+            get(dashboard_api::handle_room_summary),
+        )
+        .route(
+            "/dashboard/api/rooms/{id}/summary-document",
+            get(dashboard_api::handle_room_summary_document),
+        )
+        .route(
+            "/dashboard/api/rooms/{id}/recall",
+            get(dashboard_api::handle_room_recall),
+        )
+        // Memory feedback, graph, timeline (Tier 1).
+        .route(
+            "/dashboard/api/memories/{id}/feedback",
+            post(dashboard_api::handle_memory_feedback),
+        )
+        .route(
+            "/dashboard/api/memories/{id}/graph",
+            get(dashboard_api::handle_memory_graph),
+        )
+        .route(
+            "/dashboard/api/memories/{id}/edges",
+            post(dashboard_api::handle_memory_edges_add)
+                .delete(dashboard_api::handle_memory_edges_remove),
+        )
+        .route(
+            "/dashboard/api/memories/{id}/timeline",
+            get(dashboard_api::handle_memory_timeline),
+        )
+        // Tags management (Tier 1) — wrap upstream `/tags/rename`, `/tags/delete`.
+        .route(
+            "/dashboard/api/tags/rename",
+            post(dashboard_api::handle_tag_rename),
+        )
+        .route(
+            "/dashboard/api/tags/{tag}",
+            delete(dashboard_api::handle_tag_delete),
+        )
+        // Import / Export (Tier 1) — wrap upstream `/export`, `/import`.
+        .route("/dashboard/api/export", get(dashboard_api::handle_export))
+        .route("/dashboard/api/import", post(dashboard_api::handle_import))
+        // Document rooms (Tier 1) — wrap upstream `/doc/room/list`.
+        .route(
+            "/dashboard/api/documents/{slug}/rooms",
+            get(dashboard_api::handle_document_rooms),
         )
 }
 
