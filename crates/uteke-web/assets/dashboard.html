@@ -1312,11 +1312,11 @@ function roomRender(){
   if(!R.rows.length){ tb.innerHTML=""; $("room-empty").style.display="block"; return; }
   $("room-empty").style.display="none";
   tb.innerHTML = R.rows.map(r => `
-    <div class="card mem-card mb-2">
+    <div class="card mem-card mb-2 cursor-pointer" onclick="roomShowDetail('${esc(r.id)}')">
       <div class="card-body py-2 px-3">
         <div class="d-flex align-items-center gap-2 mb-1">
           <i class="bi bi-chat-dots text-primary"></i>
-          <span class="fw-medium cursor-pointer" onclick="roomShowDetail('${esc(r.id)}')">${esc(r.title || r.id)}</span>
+          <span class="fw-medium">${esc(r.title || r.id)}</span>
           <span class="badge bg-secondary small">${esc(r.id)}</span>
           <span class="text-muted small ms-auto">${fmtDate(r.updated_at || r.created_at)}</span>
         </div>
@@ -1330,6 +1330,8 @@ async function roomShowDetail(id){
   R.currentId = id;
   document.getElementById("rooms-list-view").style.display = "none";
   document.getElementById("rooms-detail-view").style.display = "";
+  const targetHash = "#/rooms/"+encodeURIComponent(id);
+  if(window.location.hash !== targetHash) window.location.hash = targetHash;
   try {
     // Fetch stats + memories + documents in parallel.
     const [stats, memories, docs] = await Promise.all([
