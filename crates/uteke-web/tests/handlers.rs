@@ -1248,6 +1248,105 @@ async fn dashboard_api_expired_session_returns_401() {
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
+// ── Memory doc-refs (M7 cross-reference) ────────────────────────────────────
+
+/// Spawn a mock upstream that handles `POST /memory/doc-refs`.
+async fn spawn_memory_docrefs_upstream() -> std::net::SocketAddr {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use axum::routing::post;
+
+    async fn memory_doc_refs(_b: String) -> impl IntoResponse {
+        (
+            StatusCode::OK,
+            r#"{"memory_id":"m1","doc_slugs":["deploy-runbook","api-spec"]}"#.to_string(),
+        )
+    }
+
+    let app = axum::Router::new().route("/memory/doc-refs", post(memory_doc_refs));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    addr
+}
+
+#[tokio::test]
+async fn memory_doc_refs_requires_session() {
+    let app = TestApp::new().await;
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/memories/m1/doc-refs")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn memory_doc_refs_returns_doc_slugs() {
+    let upstream = spawn_memory_docrefs_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let session_id = uteke_web::session::new_session_id();
+    let csrf = uteke_web::session::new_csrf_token();
+    app.state
+        .store
+        .add_session(&session_id, "alice", &csrf, 3600)
+        .unwrap();
+    let cookie_val =
+        uteke_web::session::sign_session_cookie(&session_id, &app.state.config.jwt_secret);
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/memories/m1/doc-refs")
+                .header("cookie", format!("uteke_session={cookie_val}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["memory_id"], "m1");
+    assert_eq!(json["doc_slugs"][0], "deploy-runbook");
+    assert_eq!(json["doc_slugs"][1], "api-spec");
+}
+
+#[tokio::test]
+async fn memory_doc_refs_upstream_down_returns_502() {
+    let app = TestApp::new().await; // upstream = 127.0.0.1:59999 (nothing listening)
+    let session_id = uteke_web::session::new_session_id();
+    let csrf = uteke_web::session::new_csrf_token();
+    app.state
+        .store
+        .add_session(&session_id, "alice", &csrf, 3600)
+        .unwrap();
+    let cookie_val =
+        uteke_web::session::sign_session_cookie(&session_id, &app.state.config.jwt_secret);
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/memories/m1/doc-refs")
+                .header("cookie", format!("uteke_session={cookie_val}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+}
+
 // ── Healthz with mock upstream ──────────────────────────────────────────────
 
 #[tokio::test]

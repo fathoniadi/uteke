@@ -229,13 +229,13 @@
         <div id="doc-detail-content" class="doc-markdown"></div>
       </div>
     </div>
-    <div class="card mb-3" id="doc-children-card" style="display:none;">
+    <div class="card mb-3" id="doc-memrefs-card" style="display:none;">
+      <div class="card-header small text-muted">Referenced by memories</div>
+      <div class="list-group list-group-flush" id="doc-memrefs-body"></div>
+    </div>
+    <div class="card" id="doc-children-card" style="display:none;">
       <div class="card-header small text-muted">Child documents</div>
       <div class="list-group list-group-flush" id="doc-children-body"></div>
-    </div>
-    <div class="card" id="doc-memrefs-card" style="display:none;">
-      <div class="card-header small text-muted">Referenced by memories</div>
-      <div class="card-body" id="doc-memrefs-body"></div>
     </div>
   </div>
 </div><!-- /page-docs -->
@@ -932,18 +932,9 @@ async function docShowDetail(slug){
         document.getElementById("doc-children-card").style.display = "none";
       }
     } catch(_){ document.getElementById("doc-children-card").style.display = "none"; }
-    // Load mem-refs (optional, non-fatal)
-    try {
-      const refs = await apiGet("/dashboard/api/documents/"+encodeURIComponent(slug)+"/mem-refs");
-      const ids = (refs && refs.memory_ids) || [];
-      if(ids.length){
-        document.getElementById("doc-memrefs-card").style.display = "";
-        document.getElementById("doc-memrefs-body").innerHTML = ids.map(id =>
-          `<span class="badge bg-secondary me-1 mb-1 id-mono">${esc(id.slice(0,8))}</span>`).join("");
-      } else {
-        document.getElementById("doc-memrefs-card").style.display = "none";
-      }
-    } catch(_){ document.getElementById("doc-memrefs-card").style.display = "none"; }
+    // Load mem-refs (optional, non-fatal) — fetch each memory detail in
+    // parallel and render as a list (content preview + type + importance).
+    loadDocMemRefs(slug);
   } catch(e){
     toast("Failed to load document: "+e.message);
     docBackToList();
@@ -954,6 +945,47 @@ function docBackToList(){
   document.getElementById("docs-list-view").style.display = "";
   D.currentSlug = null;
   if(window.location.hash !== "#/documents") window.location.hash = "#/documents";
+}
+
+// Fetch memories referencing a document and render them as a list.
+// Each item shows content preview, type badge, importance, tags — clickable
+// to open the memory detail modal. Empty or error → hide the card (non-fatal).
+async function loadDocMemRefs(slug){
+  const card = document.getElementById("doc-memrefs-card");
+  const body = document.getElementById("doc-memrefs-body");
+  try {
+    const refs = await apiGet("/dashboard/api/documents/"+encodeURIComponent(slug)+"/mem-refs");
+    const ids = (refs && refs.memory_ids) || [];
+    if(!ids.length){ card.style.display = "none"; return; }
+    // Fetch each memory detail in parallel (count usually small).
+    const mems = (await Promise.all(
+      ids.map(id => apiGet("/dashboard/api/memories/"+encodeURIComponent(id)).catch(() => null))
+    )).filter(Boolean);
+    if(!mems.length){ card.style.display = "none"; return; }
+    // Newest first.
+    mems.sort((a,b) => (b.created_at||"").localeCompare(a.created_at||""));
+    card.style.display = "";
+    body.innerHTML = mems.map(m => {
+      const imp = m.importance ?? 0;
+      const tagsPills = (m.tags||[]).map(t =>
+        `<span class="badge bg-info text-white me-1">${esc(t)}</span>`).join("");
+      return `<div class="list-group-item list-group-item-action cursor-pointer py-2 px-3" onclick="openDetail('${esc(m.id)}')">
+        <div class="d-flex align-items-center gap-2 mb-1">
+          <span class="id-mono small">${esc(shortId(m.id))}</span>
+          <span class="badge type-badge bg-${typeColor(m.memory_type||"note")}">${esc(m.memory_type||"note")}</span>
+          ${m.pinned ? '<span class="text-warning">★</span>' : ""}
+          <span class="text-muted small ms-auto">${fmtDate(m.created_at)}</span>
+        </div>
+        <div class="trunc">${esc(truncSentences(m.content, 2))}</div>
+        <div class="d-flex align-items-center gap-2 mt-1">
+          <span class="small text-muted">Importance</span>
+          <span class="imp-bar"><span style="width:${Math.round(imp*100)}%;background:${impColor(imp)}"></span></span>
+          <span class="small text-muted">${imp.toFixed(2)}</span>
+        </div>
+        ${tagsPills ? `<div class="mem-tags mt-1">${tagsPills}</div>` : ""}
+      </div>`;
+    }).join("");
+  } catch(_){ card.style.display = "none"; }
 }
 
 // ── Docs: create/edit ─────────────────────────────────────────────────────

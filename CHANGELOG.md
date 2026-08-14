@@ -2,7 +2,9 @@
 
 ### Added
 
-- **uteke-web dashboard: memory → documents cross-reference** — Memory detail modal now shows the list of documents referenced by the memory via `[[doc-slug]]` wikilinks. New typed endpoint `GET /dashboard/api/memories/{id}/doc-refs` wraps upstream `POST /memory/doc-refs` (#689). Empty list renders "—"; fetch is non-fatal so the modal always opens. Each document is a clickable link to `#/documents/{slug}`.
+- **uteke-web dashboard: memory ↔ documents cross-reference** — Two-way cross-reference between memories and documents in the dashboard:
+  - **Memory detail modal** now shows the list of documents referenced by the memory via `[[doc-slug]]` wikilinks. New typed endpoint `GET /dashboard/api/memories/{id}/doc-refs` wraps upstream `POST /memory/doc-refs` (#689). Empty list renders "—"; fetch is non-fatal so the modal always opens. Each document is a clickable link to `#/documents/{slug}`.
+  - **Document detail page** now renders the memories referencing the document as a full list (content preview, type badge, importance bar, tags, created date) — not just 8-char ID badges. Each item is clickable to open the memory detail modal. The list is positioned below the parent document card and above the child documents card. Memory details are fetched in parallel via `GET /dashboard/api/memories/{id}`; empty or error → card hidden (non-fatal).
 
 - **uteke-web dashboard typed API layer + full SPA (M7.1–M7.6)** — The dashboard graduated from a minimal recall+remember shell to a full memory management UI. No changes to `uteke-server` — the browser-facing REST contract is owned by `uteke-web`, which translates each call to the upstream server.
   - **Typed API layer** (`crates/uteke-web/src/dashboard_api.rs`): clean REST contract under `/dashboard/api/*` — `GET /memories` (browse/semantic/fts modes), `GET /memories/{id}`, `POST /memories`, `PUT /memories/{id}`, `DELETE /memories/{id}`, `GET /tags`, `GET /namespaces`, `GET /stats`, `GET /profile`. Replaces the previous generic passthrough (which dropped query strings and exposed raw upstream paths). Session + CSRF enforced on every handler; mutations require the double-submit CSRF token.
