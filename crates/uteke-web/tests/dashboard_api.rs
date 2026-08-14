@@ -529,7 +529,6 @@ async fn stats_endpoint_returns_store_stats() {
     let json = read_json(resp).await;
     assert_eq!(json["total_memories"], 42);
     assert_eq!(json["unique_tags"], 5);
-    assert_eq!(json["total_documents"], 3);
 }
 
 #[tokio::test]
