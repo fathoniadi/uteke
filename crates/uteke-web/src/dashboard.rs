@@ -270,9 +270,40 @@ pub async fn dashboard_callback(
 <title>uteke — Login Failed</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+<style>
+  [data-theme="indigo"] {{ --u-accent:#6366f1; --u-bg:#fff; --u-surface:#f8fafc; --u-border:#e2e8f0; --u-text:#1e293b; --u-text-muted:#64748b; --u-danger:#dc2626; }}
+  [data-theme="indigo"][data-mode="dark"] {{ --u-accent:#818cf8; --u-bg:#0f172a; --u-surface:#1e293b; --u-border:#334155; --u-text:#e2e8f0; --u-text-muted:#94a3b8; --u-danger:#f87171; }}
+  [data-theme="slate"] {{ --u-accent:#0d9488; --u-bg:#fff; --u-surface:#f1f5f9; --u-border:#e2e8f0; --u-text:#1e293b; --u-text-muted:#64748b; --u-danger:#dc2626; }}
+  [data-theme="slate"][data-mode="dark"] {{ --u-accent:#2dd4bf; --u-bg:#0f172a; --u-surface:#1e293b; --u-border:#334155; --u-text:#e2e8f0; --u-text-muted:#94a3b8; --u-danger:#f87171; }}
+  [data-theme="warm"] {{ --u-accent:#d97706; --u-bg:#fffbeb; --u-surface:#fef3c7; --u-border:#e7e5e4; --u-text:#292524; --u-text-muted:#78716c; --u-danger:#dc2626; }}
+  [data-theme="warm"][data-mode="dark"] {{ --u-accent:#fbbf24; --u-bg:#1c1917; --u-surface:#292524; --u-border:#44403c; --u-text:#e7e5e4; --u-text-muted:#a8a29e; --u-danger:#f87171; }}
+  [data-theme="mono"] {{ --u-accent:#171717; --u-bg:#fff; --u-surface:#f5f5f5; --u-border:#e5e5e5; --u-text:#171717; --u-text-muted:#737373; --u-danger:#dc2626; }}
+  [data-theme="mono"][data-mode="dark"] {{ --u-accent:#fafafa; --u-bg:#0a0a0a; --u-surface:#171717; --u-border:#262626; --u-text:#fafafa; --u-text-muted:#a3a3a3; --u-danger:#f87171; }}
+  * {{ box-shadow: none !important; }}
+  body {{ background: var(--u-bg); color: var(--u-text); }}
+  .card {{ background: var(--u-surface); border: 1px solid var(--u-border); border-radius: 4px; }}
+  .card-body {{ background: var(--u-bg); }}
+  .text-danger {{ color: var(--u-danger) !important; }}
+  .text-muted {{ color: var(--u-text-muted) !important; }}
+  .bg-light {{ background: var(--u-bg) !important; }}
+  .btn-outline-primary {{ --bs-btn-color: var(--u-accent); --bs-btn-border-color: var(--u-accent); --bs-btn-hover-bg: var(--u-accent); --bs-btn-hover-border-color: var(--u-accent); border-radius: 4px; }}
+</style>
+<script>
+  (function() {{
+    try {{
+      var t = localStorage.getItem("uteke_theme") || "indigo";
+      var m = localStorage.getItem("uteke_mode") || "light";
+      document.documentElement.setAttribute("data-theme", t);
+      document.documentElement.setAttribute("data-mode", m);
+    }} catch(e) {{
+      document.documentElement.setAttribute("data-theme", "indigo");
+      document.documentElement.setAttribute("data-mode", "light");
+    }}
+  }})();
+</script>
 </head>
-<body class="d-flex align-items-center justify-content-center min-vh-100 bg-light">
-<div class="card shadow-sm" style="max-width:420px;">
+<body class="d-flex align-items-center justify-content-center min-vh-100">
+<div class="card" style="max-width:420px;">
   <div class="card-body p-4 text-center">
     <i class="bi bi-x-octagon fs-1 text-danger"></i>
     <h1 class="h4 mt-2">Login failed</h1>

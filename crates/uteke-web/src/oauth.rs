@@ -944,12 +944,45 @@ fn login_page_inner(
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
 <style>
-  body {{ background: #f1f5f9; }}
+  /* Flat design theme variables (synced with dashboard.html) */
+  [data-theme="indigo"] {{ --u-accent:#6366f1; --u-accent-text:#fff; --u-accent-subtle:#e0e7ff; --u-bg:#fff; --u-surface:#f8fafc; --u-surface-hover:#f1f5f9; --u-border:#e2e8f0; --u-border-strong:#cbd5e1; --u-text:#1e293b; --u-text-muted:#64748b; --u-sidebar-bg:#1e1b4b; --u-success:#16a34a; --u-warning:#d97706; --u-danger:#dc2626; --u-info:#0ea5e9; }}
+  [data-theme="indigo"][data-mode="dark"] {{ --u-accent:#818cf8; --u-accent-text:#0f172a; --u-accent-subtle:#312e81; --u-bg:#0f172a; --u-surface:#1e293b; --u-surface-hover:#334155; --u-border:#334155; --u-border-strong:#475569; --u-text:#e2e8f0; --u-text-muted:#94a3b8; --u-sidebar-bg:#0c0a1f; --u-success:#4ade80; --u-warning:#fbbf24; --u-danger:#f87171; --u-info:#38bdf8; }}
+  [data-theme="slate"] {{ --u-accent:#0d9488; --u-accent-text:#fff; --u-accent-subtle:#ccfbf1; --u-bg:#fff; --u-surface:#f1f5f9; --u-surface-hover:#e2e8f0; --u-border:#e2e8f0; --u-border-strong:#cbd5e1; --u-text:#1e293b; --u-text-muted:#64748b; --u-sidebar-bg:#1e293b; --u-success:#16a34a; --u-warning:#d97706; --u-danger:#dc2626; --u-info:#0ea5e9; }}
+  [data-theme="slate"][data-mode="dark"] {{ --u-accent:#2dd4bf; --u-accent-text:#0f172a; --u-accent-subtle:#134e4a; --u-bg:#0f172a; --u-surface:#1e293b; --u-surface-hover:#334155; --u-border:#334155; --u-border-strong:#475569; --u-text:#e2e8f0; --u-text-muted:#94a3b8; --u-sidebar-bg:#020617; --u-success:#4ade80; --u-warning:#fbbf24; --u-danger:#f87171; --u-info:#38bdf8; }}
+  [data-theme="warm"] {{ --u-accent:#d97706; --u-accent-text:#fff; --u-accent-subtle:#fef3c7; --u-bg:#fffbeb; --u-surface:#fef3c7; --u-surface-hover:#fde68a; --u-border:#e7e5e4; --u-border-strong:#d6d3d1; --u-text:#292524; --u-text-muted:#78716c; --u-sidebar-bg:#451a03; --u-success:#16a34a; --u-warning:#ca8a04; --u-danger:#dc2626; --u-info:#0ea5e9; }}
+  [data-theme="warm"][data-mode="dark"] {{ --u-accent:#fbbf24; --u-accent-text:#1c1917; --u-accent-subtle:#422006; --u-bg:#1c1917; --u-surface:#292524; --u-surface-hover:#44403c; --u-border:#44403c; --u-border-strong:#57534e; --u-text:#e7e5e4; --u-text-muted:#a8a29e; --u-sidebar-bg:#0c0a09; --u-success:#4ade80; --u-warning:#fbbf24; --u-danger:#f87171; --u-info:#38bdf8; }}
+  [data-theme="mono"] {{ --u-accent:#171717; --u-accent-text:#fff; --u-accent-subtle:#e5e5e5; --u-bg:#fff; --u-surface:#f5f5f5; --u-surface-hover:#e5e5e5; --u-border:#e5e5e5; --u-border-strong:#d4d4d4; --u-text:#171717; --u-text-muted:#737373; --u-sidebar-bg:#171717; --u-success:#16a34a; --u-warning:#d97706; --u-danger:#dc2626; --u-info:#0ea5e9; }}
+  [data-theme="mono"][data-mode="dark"] {{ --u-accent:#fafafa; --u-accent-text:#0a0a0a; --u-accent-subtle:#262626; --u-bg:#0a0a0a; --u-surface:#171717; --u-surface-hover:#262626; --u-border:#262626; --u-border-strong:#404040; --u-text:#fafafa; --u-text-muted:#a3a3a3; --u-sidebar-bg:#000; --u-success:#4ade80; --u-warning:#fbbf24; --u-danger:#f87171; --u-info:#38bdf8; }}
+  :root {{ --bs-primary: var(--u-accent); --bs-body-bg: var(--u-bg); --bs-body-color: var(--u-text); --bs-border-color: var(--u-border); --bs-border-radius: 4px; --bs-link-color: var(--u-accent); }}
+  * {{ box-shadow: none !important; }}
+  body {{ background: var(--u-bg); color: var(--u-text); }}
   .login-card {{ max-width: 380px; }}
+  .card {{ background: var(--u-surface); border: 1px solid var(--u-border); border-radius: 4px; }}
+  .card-body {{ background: var(--u-bg); }}
+  .text-primary {{ color: var(--u-accent) !important; }}
+  .form-control {{ background: var(--u-bg); border: 1px solid var(--u-border-strong); border-radius: 4px; color: var(--u-text); }}
+  .form-control:focus {{ border-color: var(--u-accent); box-shadow: 0 0 0 1px var(--u-accent) !important; }}
+  .form-label {{ color: var(--u-text-muted); font-weight: 500; font-size: 0.8rem; }}
+  .input-group-text {{ background: var(--u-surface); border-color: var(--u-border-strong); color: var(--u-text-muted); }}
+  .btn-primary {{ --bs-btn-bg: var(--u-accent); --bs-btn-border-color: var(--u-accent); --bs-btn-hover-bg: var(--u-accent); --bs-btn-hover-border-color: var(--u-accent); --bs-btn-color: var(--u-accent-text); --bs-btn-hover-color: var(--u-accent-text); border-radius: 4px; }}
+  .alert-danger {{ background: var(--u-danger); border: none; border-radius: 4px; color: #fff; }}
 </style>
+<script>
+  (function() {{
+    try {{
+      var t = localStorage.getItem("uteke_theme") || "indigo";
+      var m = localStorage.getItem("uteke_mode") || "light";
+      document.documentElement.setAttribute("data-theme", t);
+      document.documentElement.setAttribute("data-mode", m);
+    }} catch(e) {{
+      document.documentElement.setAttribute("data-theme", "indigo");
+      document.documentElement.setAttribute("data-mode", "light");
+    }}
+  }})();
+</script>
 </head>
 <body class="d-flex align-items-center justify-content-center min-vh-100">
-<div class="card login-card shadow-sm">
+<div class="card login-card">
   <div class="card-body p-4">
     <div class="text-center mb-3">
       <i class="bi bi-shield-lock fs-1 text-primary"></i>
@@ -1005,9 +1038,39 @@ fn error_page(msg: &str) -> Response {
 <title>uteke — Error</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+<style>
+  [data-theme="indigo"] {{ --u-accent:#6366f1; --u-bg:#fff; --u-surface:#f8fafc; --u-border:#e2e8f0; --u-text:#1e293b; --u-text-muted:#64748b; --u-danger:#dc2626; }}
+  [data-theme="indigo"][data-mode="dark"] {{ --u-accent:#818cf8; --u-bg:#0f172a; --u-surface:#1e293b; --u-border:#334155; --u-text:#e2e8f0; --u-text-muted:#94a3b8; --u-danger:#f87171; }}
+  [data-theme="slate"] {{ --u-accent:#0d9488; --u-bg:#fff; --u-surface:#f1f5f9; --u-border:#e2e8f0; --u-text:#1e293b; --u-text-muted:#64748b; --u-danger:#dc2626; }}
+  [data-theme="slate"][data-mode="dark"] {{ --u-accent:#2dd4bf; --u-bg:#0f172a; --u-surface:#1e293b; --u-border:#334155; --u-text:#e2e8f0; --u-text-muted:#94a3b8; --u-danger:#f87171; }}
+  [data-theme="warm"] {{ --u-accent:#d97706; --u-bg:#fffbeb; --u-surface:#fef3c7; --u-border:#e7e5e4; --u-text:#292524; --u-text-muted:#78716c; --u-danger:#dc2626; }}
+  [data-theme="warm"][data-mode="dark"] {{ --u-accent:#fbbf24; --u-bg:#1c1917; --u-surface:#292524; --u-border:#44403c; --u-text:#e7e5e4; --u-text-muted:#a8a29e; --u-danger:#f87171; }}
+  [data-theme="mono"] {{ --u-accent:#171717; --u-bg:#fff; --u-surface:#f5f5f5; --u-border:#e5e5e5; --u-text:#171717; --u-text-muted:#737373; --u-danger:#dc2626; }}
+  [data-theme="mono"][data-mode="dark"] {{ --u-accent:#fafafa; --u-bg:#0a0a0a; --u-surface:#171717; --u-border:#262626; --u-text:#fafafa; --u-text-muted:#a3a3a3; --u-danger:#f87171; }}
+  * {{ box-shadow: none !important; }}
+  body {{ background: var(--u-bg); color: var(--u-text); }}
+  .card {{ background: var(--u-surface); border: 1px solid var(--u-border); border-radius: 4px; }}
+  .card-body {{ background: var(--u-bg); }}
+  .text-danger {{ color: var(--u-danger) !important; }}
+  .text-muted {{ color: var(--u-text-muted) !important; }}
+  .bg-light {{ background: var(--u-bg) !important; }}
+</style>
+<script>
+  (function() {{
+    try {{
+      var t = localStorage.getItem("uteke_theme") || "indigo";
+      var m = localStorage.getItem("uteke_mode") || "light";
+      document.documentElement.setAttribute("data-theme", t);
+      document.documentElement.setAttribute("data-mode", m);
+    }} catch(e) {{
+      document.documentElement.setAttribute("data-theme", "indigo");
+      document.documentElement.setAttribute("data-mode", "light");
+    }}
+  }})();
+</script>
 </head>
-<body class="d-flex align-items-center justify-content-center min-vh-100 bg-light">
-<div class="card shadow-sm" style="max-width:420px;">
+<body class="d-flex align-items-center justify-content-center min-vh-100">
+<div class="card" style="max-width:420px;">
   <div class="card-body p-4 text-center">
     <i class="bi bi-exclamation-octagon fs-1 text-danger"></i>
     <h1 class="h4 mt-2">Authentication Error</h1>
