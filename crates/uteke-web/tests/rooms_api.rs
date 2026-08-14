@@ -54,8 +54,19 @@ async fn spawn_room_upstream() -> std::net::SocketAddr {
             r#"{"created":"room-1","namespace":"default"}"#.to_string(),
         )
     }
-    async fn room_stats(_b: String) -> impl IntoResponse {
-        (StatusCode::OK, ROOM_STATS_JSON.to_string())
+    async fn room_stats(b: String) -> impl IntoResponse {
+        // Return stats only for the known room_id "room-1"; return null for
+        // any other room_id so the auto-generation collision check sees them
+        // as available.
+        let room_id = serde_json::from_str::<serde_json::Value>(&b)
+            .ok()
+            .and_then(|v| v.get("room_id").and_then(|s| s.as_str()).map(String::from))
+            .unwrap_or_default();
+        if room_id == "room-1" {
+            (StatusCode::OK, ROOM_STATS_JSON.to_string())
+        } else {
+            (StatusCode::OK, "null".to_string())
+        }
     }
     async fn room_memories(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
         let _ = q.get("room_id");
@@ -304,7 +315,7 @@ async fn room_create_returns_created() {
                 .header("cookie", &cookie)
                 .header("x-csrf-token", &csrf)
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"room_id":"room-1","title":"Planning"}"#))
+                .body(Body::from(r#"{"title":"Planning"}"#))
                 .unwrap(),
         )
         .await
@@ -315,7 +326,10 @@ async fn room_create_returns_created() {
 }
 
 #[tokio::test]
-async fn room_create_rejects_empty_id() {
+async fn room_create_auto_generates_id_from_title() {
+    // The dashboard API ignores any client-supplied room_id and auto-
+    // generates one from the title. The response carries the upstream
+    // "created" field.
     let upstream = spawn_room_upstream().await;
     let app = TestApp::with_upstream(upstream).await;
     let (cookie, csrf) = make_session(&app, "alice");
@@ -329,12 +343,13 @@ async fn room_create_rejects_empty_id() {
                 .header("cookie", &cookie)
                 .header("x-csrf-token", &csrf)
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"room_id":""}"#))
+                // No title — room_id should be just the random suffix.
+                .body(Body::from(r#"{}"#))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(resp.status(), StatusCode::OK);
 }
 
 #[tokio::test]

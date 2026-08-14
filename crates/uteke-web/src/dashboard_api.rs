@@ -28,6 +28,164 @@ const MAX_PAGE_LIMIT: usize = 100;
 /// Cap for search-mode fetches (recall/search have no offset pagination, so
 /// we fetch a window and slice client-side).
 const SEARCH_FETCH_CAP: usize = 100;
+/// Max collision-retry attempts when auto-generating a slug or room_id.
+const SLUG_MAX_RETRIES: usize = 5;
+/// Length of the random alphanumeric suffix appended to auto-generated slugs.
+const SLUG_SUFFIX_LEN: usize = 6;
+
+// ── Slug / room_id auto-generation ───────────────────────────────────────────
+//
+// Implements the uteke naming convention (key:uteke_slug_room_id_rule):
+//   slug (or room_id) = escaped_title + "-" + random_suffix
+//
+// escaped_title:
+//   1. lowercase(title)
+//   2. replace spaces and periods with "-"
+//   3. strip non-alphanumeric characters (dashes excluded)
+//   4. trim leading/trailing dashes only (consecutive dashes in the
+//      middle are NOT collapsed)
+//
+// random_suffix: 6 alphanumeric characters (a-z0-9)
+//
+// MANDATORY: check the store for a collision before insert; if a collision
+// occurs, regenerate the suffix and retry (max SLUG_MAX_RETRIES attempts).
+
+/// Escape a human-readable title into the slug-safe prefix per the uteke
+/// naming convention. Returns an empty string when `title` is empty or
+/// contains no alphanumeric characters.
+fn escape_title(title: &str) -> String {
+    let lower = title.to_lowercase();
+    let replaced: String = lower
+        .chars()
+        .map(|c| if c == ' ' || c == '.' { '-' } else { c })
+        .collect();
+    let stripped: String = replaced
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+    stripped.trim_matches('-').to_string()
+}
+
+/// Generate a random alphanumeric suffix of `len` characters (a-z0-9).
+fn random_suffix(len: usize) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    // Simple LCG seeded from wall-clock nanos — sufficient for slug suffix
+    // uniqueness within a single request; collision is handled by the retry
+    // loop in the caller.
+    let mut seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9e37_79b9_7f4a_7c15);
+    let chars: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    (0..len)
+        .map(|_| {
+            // xorshift64
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            chars[(seed % chars.len() as u64) as usize] as char
+        })
+        .collect()
+}
+
+/// Build a candidate slug/room_id from a title.
+/// If the escaped title is empty, the result is just the random suffix
+/// (no leading dash).
+fn build_slug(title: &str) -> String {
+    let escaped = escape_title(title);
+    let suffix = random_suffix(SLUG_SUFFIX_LEN);
+    if escaped.is_empty() {
+        suffix
+    } else {
+        format!("{escaped}-{suffix}")
+    }
+}
+
+/// Extract the first Markdown ATX/Setext heading from `content`.
+/// Returns the heading text trimmed, or `None` if no heading is found.
+fn extract_first_heading(content: &str) -> Option<String> {
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        // ATX heading: "# Title", "## Title", etc.
+        if let Some(rest) = trimmed.strip_prefix('#') {
+            let rest = rest.trim_start_matches('#');
+            let text = rest.trim();
+            if !text.is_empty() {
+                return Some(text.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Check whether a document slug already exists in the upstream store.
+/// Returns `true` if the slug resolves to an existing document.
+async fn doc_slug_exists(client: &UtekeClient<'_>, slug: &str) -> bool {
+    let body = serde_json::json!({ "slug": slug });
+    match client.post("/doc/get", &body).await {
+        Ok(resp) if resp.status().is_success() => {
+            matches!(resp.json::<Option<serde_json::Value>>().await, Ok(Some(_)))
+        }
+        _ => false,
+    }
+}
+
+/// Check whether a room_id already exists in the upstream store.
+/// Returns `true` if the room resolves to existing room stats.
+async fn room_id_exists(client: &UtekeClient<'_>, room_id: &str) -> bool {
+    let body = serde_json::json!({ "room_id": room_id });
+    match client.post("/room/stats", &body).await {
+        Ok(resp) if resp.status().is_success() => {
+            matches!(resp.json::<Option<serde_json::Value>>().await, Ok(Some(_)))
+        }
+        _ => false,
+    }
+}
+
+/// Auto-generate a unique document slug from `title` (or `content`'s first
+/// heading when the title is empty). Retries with a fresh random suffix on
+/// collision, up to `SLUG_MAX_RETRIES` times.
+async fn generate_unique_doc_slug(
+    client: &UtekeClient<'_>,
+    title: Option<&str>,
+    content: &str,
+) -> Result<String, String> {
+    let base = title
+        .filter(|t| !t.trim().is_empty())
+        .map(|t| t.trim().to_string())
+        .or_else(|| extract_first_heading(content))
+        .unwrap_or_default();
+    for _ in 0..SLUG_MAX_RETRIES {
+        let candidate = build_slug(&base);
+        if !doc_slug_exists(client, &candidate).await {
+            return Ok(candidate);
+        }
+    }
+    Err(format!(
+        "could not generate a unique slug after {SLUG_MAX_RETRIES} attempts"
+    ))
+}
+
+/// Auto-generate a unique room_id from `title`. Retries with a fresh random
+/// suffix on collision, up to `SLUG_MAX_RETRIES` times.
+async fn generate_unique_room_id(
+    client: &UtekeClient<'_>,
+    title: Option<&str>,
+) -> Result<String, String> {
+    let base = title
+        .filter(|t| !t.trim().is_empty())
+        .map(|t| t.trim().to_string())
+        .unwrap_or_default();
+    for _ in 0..SLUG_MAX_RETRIES {
+        let candidate = build_slug(&base);
+        if !room_id_exists(client, &candidate).await {
+            return Ok(candidate);
+        }
+    }
+    Err(format!(
+        "could not generate a unique room_id after {SLUG_MAX_RETRIES} attempts"
+    ))
+}
 
 // ── Typed response structs (browser-facing) ─────────────────────────────────
 
@@ -887,9 +1045,16 @@ pub struct DocumentSearchQuery {
 }
 
 /// `POST /dashboard/api/documents` body.
+///
+/// The `slug` is **auto-generated** by the server from `title` (or the first
+/// Markdown heading in `content` when `title` is empty) following the uteke
+/// naming convention (`escaped_title + "-" + random_suffix`). A `slug` field
+/// sent by the client is accepted for backward compatibility but **ignored**.
 #[derive(Debug, Deserialize)]
 pub struct CreateDocumentRequest {
-    pub slug: String,
+    /// Ignored — slug is always auto-generated. Kept for backward compat.
+    #[serde(default)]
+    pub slug: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
     pub content: String,
@@ -1095,15 +1260,18 @@ pub async fn handle_create_document(
         Ok(v) => v,
         Err(e) => return api_error(StatusCode::BAD_REQUEST, &format!("invalid body: {e}")),
     };
-    if req.slug.trim().is_empty() {
-        return api_error(StatusCode::BAD_REQUEST, "slug must not be empty");
-    }
     if req.content.trim().is_empty() {
         return api_error(StatusCode::BAD_REQUEST, "content must not be empty");
     }
     let client = UtekeClient::new(&state);
+    // Auto-generate slug from title (or first heading in content) with
+    // collision check — client-supplied slug is ignored.
+    let slug = match generate_unique_doc_slug(&client, req.title.as_deref(), &req.content).await {
+        Ok(s) => s,
+        Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
     let payload = serde_json::json!({
-        "slug": req.slug,
+        "slug": slug,
         "title": req.title,
         "content": req.content,
         "tags": req.tags,
@@ -1121,11 +1289,11 @@ pub async fn handle_create_document(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let slug = created
+    let created_slug = created
         .get("slug")
         .and_then(|v| v.as_str())
-        .unwrap_or(&req.slug);
-    match fetch_document(&client, slug).await {
+        .unwrap_or(&slug);
+    match fetch_document(&client, created_slug).await {
         Ok(d) => Json(d).into_response(),
         Err(r) => r,
     }
@@ -1307,9 +1475,17 @@ pub struct RoomListQuery {
 }
 
 /// `POST /dashboard/api/rooms` body.
+///
+/// The `room_id` is **auto-generated** by the server from `title` following
+/// the uteke naming convention (`escaped_title + "-" + random_suffix`). A
+/// `room_id` field sent by the client is accepted for backward compatibility
+/// but **ignored**. When `title` is empty the room_id is just the random
+/// suffix.
 #[derive(Debug, Deserialize)]
 pub struct CreateRoomRequest {
-    pub room_id: String,
+    /// Ignored — room_id is always auto-generated. Kept for backward compat.
+    #[serde(default)]
+    pub room_id: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
@@ -1402,12 +1578,15 @@ pub async fn handle_create_room(
         Ok(v) => v,
         Err(e) => return api_error(StatusCode::BAD_REQUEST, &format!("invalid body: {e}")),
     };
-    if req.room_id.trim().is_empty() {
-        return api_error(StatusCode::BAD_REQUEST, "room_id must not be empty");
-    }
     let client = UtekeClient::new(&state);
+    // Auto-generate room_id from title with collision check —
+    // client-supplied room_id is ignored.
+    let room_id = match generate_unique_room_id(&client, req.title.as_deref()).await {
+        Ok(s) => s,
+        Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
     let mut payload = serde_json::json!({
-        "room_id": req.room_id,
+        "room_id": room_id,
         "title": req.title,
     });
     if let Some(ns) = req.namespace.as_deref().filter(|n| !n.is_empty()) {
@@ -1417,10 +1596,15 @@ pub async fn handle_create_room(
         Ok(r) => r,
         Err(e) => return upstream_err(e),
     };
-    let val: serde_json::Value = match parse_json(resp).await {
+    let mut val: serde_json::Value = match parse_json(resp).await {
         Ok(v) => v,
         Err(r) => return r,
     };
+    // Ensure the response carries the generated room_id so the frontend can
+    // navigate to the new room without a separate lookup.
+    if val.get("created").is_none() {
+        val["created"] = serde_json::json!(room_id);
+    }
     Json(val).into_response()
 }
 
