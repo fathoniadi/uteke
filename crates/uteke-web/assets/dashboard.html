@@ -1258,8 +1258,11 @@ async function docConfirmDelete(){
     docModals["m-doc-delete"].hide();
     const sub = r.subtree_size != null ? ` (${r.subtree_size} children cascaded)` : "";
     toast("Deleted"+sub);
-    D.currentSlug = null;
-    window.location.hash = "#/documents";
+    // Always show + reload the list explicitly — setting the hash alone is
+    // a no-op when already on "#/documents" (deleting from the list's own
+    // dropdown), so the deleted row would otherwise stay stuck on screen.
+    docShowList();
+    if(window.location.hash !== "#/documents") window.location.hash = "#/documents";
   } catch(e){ toast("Delete failed: "+e.message); }
 }
 
@@ -1489,8 +1492,11 @@ async function roomConfirmDelete(){
     await apiMutate("/dashboard/api/rooms/"+encodeURIComponent(R.currentId), "DELETE");
     roomModals["m-room-delete"].hide();
     toast("Room deleted");
-    R.currentId = null;
-    window.location.hash = "#/rooms";
+    // Always show + reload the list explicitly — setting the hash alone is
+    // a no-op when already on "#/rooms" (deleting from the list's own
+    // dropdown), so the deleted row would otherwise stay stuck on screen.
+    roomShowList();
+    if(window.location.hash !== "#/rooms") window.location.hash = "#/rooms";
   } catch(e){ toast("Delete failed: "+e.message); }
 }
 
