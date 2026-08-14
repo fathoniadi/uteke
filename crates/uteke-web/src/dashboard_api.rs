@@ -2408,6 +2408,448 @@ pub async fn handle_document_rooms(
     Json(val).into_response()
 }
 
+// ── Settings: Clients (OAuth2 credentials) ──────────────────────────────────
+
+/// `GET /dashboard/api/settings/clients` — list all OAuth2 clients.
+pub async fn handle_settings_list_clients(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    match state.store.list_clients() {
+        Ok(clients) => {
+            let rows: Vec<serde_json::Value> = clients
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "id": c.id,
+                        "client_id": c.client_id,
+                        "redirect_uris": c.redirect_uris,
+                        "scopes": c.scopes,
+                        "grants": c.grants,
+                        "public": c.public,
+                        "dynamic": c.dynamic,
+                        "created_at": c.created_at,
+                    })
+                })
+                .collect();
+            Json(rows).into_response()
+        }
+        Err(e) => api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("store error: {e}"),
+        ),
+    }
+}
+
+/// `POST /dashboard/api/settings/clients` body.
+#[derive(Debug, Deserialize)]
+pub struct CreateClientRequest {
+    pub client_id: String,
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    #[serde(default)]
+    pub redirect_uris: Vec<String>,
+    #[serde(default)]
+    pub public: bool,
+}
+
+/// `POST /dashboard/api/settings/clients` — register a new OAuth2 client.
+/// Requires session + CSRF.
+pub async fn handle_settings_create_client(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let req: CreateClientRequest = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return api_error(StatusCode::BAD_REQUEST, &format!("invalid body: {e}")),
+    };
+    if req.client_id.trim().is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "client_id must not be empty");
+    }
+    let secret = req.client_secret.as_deref().unwrap_or("");
+    if !req.public && secret.is_empty() {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "client_secret required for non-public clients",
+        );
+    }
+    match state.store.add_client(
+        &req.client_id,
+        secret,
+        req.redirect_uris,
+        vec!["read".to_string(), "write".to_string()],
+        req.public,
+        false,
+    ) {
+        Ok(c) => Json(serde_json::json!({
+            "id": c.id,
+            "client_id": c.client_id,
+            "redirect_uris": c.redirect_uris,
+            "scopes": c.scopes,
+            "public": c.public,
+            "created_at": c.created_at,
+        }))
+        .into_response(),
+        Err(e) => api_error(StatusCode::CONFLICT, &format!("create failed: {e}")),
+    }
+}
+
+/// `DELETE /dashboard/api/settings/clients/{id}` — delete an OAuth2 client.
+/// Requires session + CSRF.
+pub async fn handle_settings_delete_client(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    match state.store.delete_client(&id) {
+        Ok(n) if n > 0 => Json(serde_json::json!({"deleted": true, "id": id})).into_response(),
+        Ok(_) => api_error(StatusCode::NOT_FOUND, "client not found"),
+        Err(e) => api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("delete failed: {e}"),
+        ),
+    }
+}
+
+// ── Settings: Users (dashboard users) ───────────────────────────────────────
+
+/// `GET /dashboard/api/settings/users` — list all dashboard users.
+pub async fn handle_settings_list_users(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    match state.store.list_users() {
+        Ok(users) => {
+            let rows: Vec<serde_json::Value> = users
+                .iter()
+                .map(|u| {
+                    serde_json::json!({
+                        "id": u.id,
+                        "username": u.username,
+                        "created_at": u.created_at,
+                        "locked": u.locked,
+                        "failed_attempts": u.failed_attempts,
+                    })
+                })
+                .collect();
+            Json(rows).into_response()
+        }
+        Err(e) => api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("store error: {e}"),
+        ),
+    }
+}
+
+/// `POST /dashboard/api/settings/users` body.
+#[derive(Debug, Deserialize)]
+pub struct CreateUserRequest {
+    pub username: String,
+    pub password: String,
+}
+
+/// `POST /dashboard/api/settings/users` — create a new dashboard user.
+/// Requires session + CSRF.
+pub async fn handle_settings_create_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let req: CreateUserRequest = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return api_error(StatusCode::BAD_REQUEST, &format!("invalid body: {e}")),
+    };
+    if req.username.trim().is_empty() || req.password.is_empty() {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "username and password must not be empty",
+        );
+    }
+    match state.store.add_user(&req.username, &req.password) {
+        Ok(u) => Json(serde_json::json!({
+            "id": u.id,
+            "username": u.username,
+            "created_at": u.created_at,
+            "locked": u.locked,
+            "failed_attempts": u.failed_attempts,
+        }))
+        .into_response(),
+        Err(e) => api_error(StatusCode::CONFLICT, &format!("create failed: {e}")),
+    }
+}
+
+/// `DELETE /dashboard/api/settings/users/{id}` — delete a dashboard user.
+/// Requires session + CSRF. Prevents self-deletion.
+pub async fn handle_settings_delete_user(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    // Prevent self-deletion.
+    if id == sess.username || id == sess.session_id {
+        return api_error(StatusCode::BAD_REQUEST, "cannot delete your own account");
+    }
+    match state.store.delete_user(&id) {
+        Ok(n) if n > 0 => Json(serde_json::json!({"deleted": true, "id": id})).into_response(),
+        Ok(_) => api_error(StatusCode::NOT_FOUND, "user not found"),
+        Err(e) => api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("delete failed: {e}"),
+        ),
+    }
+}
+
+/// `PUT /dashboard/api/settings/users/{id}/password` body.
+#[derive(Debug, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub new_password: String,
+}
+
+/// `PUT /dashboard/api/settings/users/{id}/password` — change a user's password.
+/// Requires session + CSRF.
+pub async fn handle_settings_change_password(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let req: ChangePasswordRequest = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return api_error(StatusCode::BAD_REQUEST, &format!("invalid body: {e}")),
+    };
+    if req.new_password.is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "password must not be empty");
+    }
+    match state.store.change_password(&id, &req.new_password) {
+        Ok(_) => Json(serde_json::json!({"changed": true, "id": id})).into_response(),
+        Err(e) => api_error(StatusCode::NOT_FOUND, &format!("change failed: {e}")),
+    }
+}
+
+/// `POST /dashboard/api/settings/users/{id}/unlock` — unlock a locked user.
+/// Requires session + CSRF.
+pub async fn handle_settings_unlock_user(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    match state.store.unlock_user(&id) {
+        Ok(_) => Json(serde_json::json!({"unlocked": true, "id": id})).into_response(),
+        Err(e) => api_error(StatusCode::NOT_FOUND, &format!("unlock failed: {e}")),
+    }
+}
+
+// ── Settings: Sessions ──────────────────────────────────────────────────────
+
+/// `GET /dashboard/api/settings/sessions` — list all active sessions.
+pub async fn handle_settings_list_sessions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    match state.store.list_sessions() {
+        Ok(sessions) => {
+            let rows: Vec<serde_json::Value> = sessions
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "session_id": s.session_id,
+                        "username": s.username,
+                        "created_at": s.created_at,
+                        "expires_at": s.expires_at,
+                    })
+                })
+                .collect();
+            Json(rows).into_response()
+        }
+        Err(e) => api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("store error: {e}"),
+        ),
+    }
+}
+
+/// `DELETE /dashboard/api/settings/sessions/{id}` — revoke a session.
+/// Requires session + CSRF. Prevents self-revocation (use logout instead).
+pub async fn handle_settings_revoke_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    // Prevent self-revocation — use /dashboard/logout instead.
+    if id == sess.session_id {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "cannot revoke your own session — use logout",
+        );
+    }
+    match state.store.delete_session(&id) {
+        Ok(_) => Json(serde_json::json!({"revoked": true, "id": id})).into_response(),
+        Err(e) => api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("revoke failed: {e}"),
+        ),
+    }
+}
+
+// ── Settings: OAuth2 Tokens (AI agent sessions) ─────────────────────────────
+
+/// `GET /dashboard/api/settings/tokens` — list all active OAuth2 refresh tokens.
+/// These represent AI agents that authenticated via OAuth2 (e.g. MCP clients).
+pub async fn handle_settings_list_tokens(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    match state.store.list_refresh_tokens() {
+        Ok(tokens) => {
+            let rows: Vec<serde_json::Value> = tokens
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "token_hash": t.token_hash,
+                        "client_id": t.client_id,
+                        "username": t.username,
+                        "scope": t.scope,
+                        "created_at": t.created_at,
+                        "expires_at": t.expires_at,
+                    })
+                })
+                .collect();
+            Json(rows).into_response()
+        }
+        Err(e) => api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("store error: {e}"),
+        ),
+    }
+}
+
+/// `DELETE /dashboard/api/settings/tokens/{hash}` — revoke an OAuth2 refresh
+/// token by its hash. This forces the AI agent to re-authenticate after its
+/// current access token expires. Requires session + CSRF.
+pub async fn handle_settings_revoke_token(
+    State(state): State<AppState>,
+    Path(hash): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    match state.store.revoke_refresh_token_by_hash(&hash) {
+        Ok(n) if n > 0 => Json(serde_json::json!({"revoked": true, "hash": hash})).into_response(),
+        Ok(_) => api_error(StatusCode::NOT_FOUND, "token not found or already revoked"),
+        Err(e) => api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("revoke failed: {e}"),
+        ),
+    }
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

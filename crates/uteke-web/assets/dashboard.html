@@ -83,6 +83,7 @@
     <li class="nav-item"><a class="nav-link" href="#/documents" data-page="documents"><i class="bi bi-file-earmark-text"></i> Documents</a></li>
     <li class="nav-item"><a class="nav-link" href="#/rooms" data-page="rooms"><i class="bi bi-chat-dots"></i> Rooms</a></li>
     <li class="nav-item"><a class="nav-link" href="#/graph" data-page="graph"><i class="bi bi-diagram-3"></i> Graph</a></li>
+    <li class="nav-item"><a class="nav-link" href="#/settings" data-page="settings"><i class="bi bi-gear"></i> Settings</a></li>
   </ul>
   <div class="sidebar-user">
     <div id="user-label" class="text-light small mb-1">—</div>
@@ -374,6 +375,103 @@
   </main>
 </div><!-- /page-graph -->
 
+<!-- ── Settings page ──────────────────────────────────────────────────────── -->
+<div id="page-settings" style="display:none;">
+  <main class="container-fluid py-3" style="max-width:1180px;">
+    <h4 class="mb-3">Settings</h4>
+    <ul class="nav nav-tabs mb-3" role="tablist">
+      <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-clients" type="button">OAuth2 Clients</button></li>
+      <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-users" type="button">Users</button></li>
+      <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-sessions" type="button">Sessions</button></li>
+      <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-tokens" type="button">OAuth2 Tokens</button></li>
+    </ul>
+    <div class="tab-content">
+      <!-- Clients tab -->
+      <div class="tab-pane fade show active" id="tab-clients">
+        <div class="d-flex mb-2">
+          <button class="btn btn-sm btn-primary ms-auto" onclick="settingsOpenCreateClient()"><i class="bi bi-plus-lg"></i> Add client</button>
+        </div>
+        <div id="settings-clients-body"></div>
+      </div>
+      <!-- Users tab -->
+      <div class="tab-pane fade" id="tab-users">
+        <div class="d-flex mb-2">
+          <button class="btn btn-sm btn-primary ms-auto" onclick="settingsOpenCreateUser()"><i class="bi bi-plus-lg"></i> Add user</button>
+        </div>
+        <div id="settings-users-body"></div>
+      </div>
+      <!-- Sessions tab -->
+      <div class="tab-pane fade" id="tab-sessions">
+        <div class="d-flex mb-2">
+          <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="settingsLoadSessions()"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+        </div>
+        <div id="settings-sessions-body"></div>
+      </div>
+      <!-- OAuth2 Tokens tab -->
+      <div class="tab-pane fade" id="tab-tokens">
+        <div class="d-flex align-items-center mb-2">
+          <span class="text-muted small">Active OAuth2 refresh tokens from AI agents (MCP clients). Revoking forces re-authentication when the current access token expires.</span>
+          <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="settingsLoadTokens()"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+        </div>
+        <div id="settings-tokens-body"></div>
+      </div>
+    </div>
+  </main>
+</div><!-- /page-settings -->
+
+<!-- Settings: create client modal -->
+<div class="modal fade" id="m-settings-client" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">New OAuth2 client</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <div class="mb-3"><label class="form-label">Client ID <span class="text-danger">*</span></label><input id="settings-client-id" class="form-control"></div>
+        <div class="mb-3"><label class="form-label">Client secret</label><input id="settings-client-secret" class="form-control" placeholder="Required for non-public clients"><div class="form-text">Leave empty if public client.</div></div>
+        <div class="mb-3"><label class="form-label">Redirect URIs</label><input id="settings-client-redirect" class="form-control" placeholder="https://example.com/callback"></div>
+        <div class="form-check"><input class="form-check-input" type="checkbox" id="settings-client-public"><label class="form-check-label" for="settings-client-public">Public client (PKCE-only, no secret)</label></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" onclick="settingsSubmitClient()"><i class="bi bi-save"></i> Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Settings: create user modal -->
+<div class="modal fade" id="m-settings-user" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">New dashboard user</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <div class="mb-3"><label class="form-label">Username <span class="text-danger">*</span></label><input id="settings-user-username" class="form-control"></div>
+        <div class="mb-3"><label class="form-label">Password <span class="text-danger">*</span></label><input id="settings-user-password" type="password" class="form-control"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" onclick="settingsSubmitUser()"><i class="bi bi-save"></i> Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Settings: change password modal -->
+<div class="modal fade" id="m-settings-password" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Change password</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <div class="mb-3"><label class="form-label">User</label><input id="settings-pw-user" class="form-control" readonly></div>
+        <div class="mb-3"><label class="form-label">New password <span class="text-danger">*</span></label><input id="settings-pw-new" type="password" class="form-control"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" onclick="settingsSubmitPassword()"><i class="bi bi-save"></i> Change</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Room create modal -->
 <div class="modal fade" id="m-room-create" tabindex="-1">
   <div class="modal-dialog">
@@ -639,7 +737,7 @@ function toast(msg){ $("toast-body").textContent = msg; bsModals.toast.show(); }
 
 // ── Bootstrap modal helpers ──────────────────────────────────────────────
 function initModals(){
-  ["m-detail","m-create","m-edit","m-forget","m-tag-rename","m-tag-delete"].forEach(id => { bsModals[id] = new bootstrap.Modal(document.getElementById(id)); });
+  ["m-detail","m-create","m-edit","m-forget","m-tag-rename","m-tag-delete","m-settings-client","m-settings-user","m-settings-password"].forEach(id => { bsModals[id] = new bootstrap.Modal(document.getElementById(id)); });
   bsModals.toast = new bootstrap.Toast($("toast"), { delay: 1800 });
 }
 function openModal(id){ bsModals[id].show(); }
@@ -1126,6 +1224,7 @@ function showPage(name){
   document.getElementById("page-docs").style.display = name === "documents" ? "" : "none";
   document.getElementById("page-rooms").style.display = name === "rooms" ? "" : "none";
   document.getElementById("page-graph").style.display = name === "graph" ? "" : "none";
+  document.getElementById("page-settings").style.display = name === "settings" ? "" : "none";
   document.querySelectorAll(".sidebar .nav-link").forEach(t => t.classList.toggle("active", t.dataset.page === name));
 }
 function toggleSidebar(){
@@ -1160,6 +1259,9 @@ function routeHash(){
   } else if(h.startsWith("/graph")){
     showPage("graph");
     graphLoad();
+  } else if(h.startsWith("/settings")){
+    showPage("settings");
+    settingsLoad();
   } else {
     showPage("memories");
   }
@@ -1994,6 +2096,198 @@ function graphRenderCytoscape(container, nodes, edges){
     ],
     layout: { name: "cose", animate: true, nodeDimensionsIncludeLabels: true, idealEdgeLength: 120, nodeRepulsion: 8000 },
   });
+}
+
+// ── Settings page (clients, users, sessions) ───────────────────────────────
+let settingsModals = {};
+function initSettingsModals(){
+  ["m-settings-client","m-settings-user","m-settings-password"].forEach(id => { settingsModals[id] = new bootstrap.Modal(document.getElementById(id)); });
+}
+initSettingsModals();
+
+function settingsLoad(){
+  settingsLoadClients();
+  settingsLoadUsers();
+  settingsLoadSessions();
+  settingsLoadTokens();
+}
+
+// ── Settings: Clients ──────────────────────────────────────────────────────
+async function settingsLoadClients(){
+  const body = $("settings-clients-body");
+  try {
+    const clients = await apiGet("/dashboard/api/settings/clients");
+    if(!clients.length){ body.innerHTML = '<div class="text-muted small py-3">No OAuth2 clients registered.</div>'; return; }
+    body.innerHTML = `<div class="table-responsive"><table class="table table-sm">
+      <thead><tr><th>Client ID</th><th>Redirect URIs</th><th>Public</th><th>Created</th><th></th></tr></thead>
+      <tbody>${clients.map(c => `<tr>
+        <td class="id-mono">${esc(c.client_id)}</td>
+        <td class="small">${(c.redirect_uris||[]).map(u => `<div>${esc(u)}</div>`).join("") || "—"}</td>
+        <td>${c.public ? '<span class="badge bg-success">Yes</span>' : '<span class="badge bg-secondary">No</span>'}</td>
+        <td class="small">${fmtDate(c.created_at)}</td>
+        <td><button class="btn btn-sm btn-outline-danger py-0 px-1" onclick="settingsDeleteClient('${esc(c.id)}','${esc(c.client_id)}')"><i class="bi bi-trash"></i></button></td>
+      </tr>`).join("")}</tbody>
+    </table></div>`;
+  } catch(e){ body.innerHTML = `<div class="text-danger small">Failed: ${esc(e.message)}</div>`; }
+}
+function settingsOpenCreateClient(){
+  $("settings-client-id").value = "";
+  $("settings-client-secret").value = "";
+  $("settings-client-redirect").value = "";
+  $("settings-client-public").checked = false;
+  settingsModals["m-settings-client"].show();
+}
+async function settingsSubmitClient(){
+  const body = {
+    client_id: $("settings-client-id").value.trim(),
+    redirect_uris: $("settings-client-redirect").value.trim() ? [$("settings-client-redirect").value.trim()] : [],
+    public: $("settings-client-public").checked,
+  };
+  if(!$("settings-client-public").checked){
+    body.client_secret = $("settings-client-secret").value;
+  }
+  if(!body.client_id){ toast("Client ID required"); return; }
+  try {
+    await apiMutate("/dashboard/api/settings/clients", "POST", body);
+    settingsModals["m-settings-client"].hide();
+    toast("Client created");
+    settingsLoadClients();
+  } catch(e){ toast("Create failed: "+e.message); }
+}
+async function settingsDeleteClient(id, clientId){
+  if(!confirm(`Delete client "${clientId}"?`)) return;
+  try {
+    await apiMutate("/dashboard/api/settings/clients/"+encodeURIComponent(id), "DELETE");
+    toast("Client deleted");
+    settingsLoadClients();
+  } catch(e){ toast("Delete failed: "+e.message); }
+}
+
+// ── Settings: Users ────────────────────────────────────────────────────────
+async function settingsLoadUsers(){
+  const body = $("settings-users-body");
+  try {
+    const users = await apiGet("/dashboard/api/settings/users");
+    if(!users.length){ body.innerHTML = '<div class="text-muted small py-3">No users.</div>'; return; }
+    body.innerHTML = `<div class="table-responsive"><table class="table table-sm">
+      <thead><tr><th>Username</th><th>Status</th><th>Failed attempts</th><th>Created</th><th></th></tr></thead>
+      <tbody>${users.map(u => `<tr>
+        <td>${esc(u.username)}</td>
+        <td>${u.locked ? '<span class="badge bg-danger">Locked</span>' : '<span class="badge bg-success">Active</span>'}</td>
+        <td>${u.failed_attempts || 0}</td>
+        <td class="small">${fmtDate(u.created_at)}</td>
+        <td class="text-nowrap">
+          <button class="btn btn-sm btn-outline-warning py-0 px-1" onclick="settingsOpenPassword('${esc(u.username)}')" title="Change password"><i class="bi bi-key"></i></button>
+          ${u.locked ? `<button class="btn btn-sm btn-outline-success py-0 px-1 ms-1" onclick="settingsUnlockUser('${esc(u.username)}')" title="Unlock"><i class="bi bi-unlock"></i></button>` : ""}
+          <button class="btn btn-sm btn-outline-danger py-0 px-1 ms-1" onclick="settingsDeleteUser('${esc(u.username)}')" title="Delete"><i class="bi bi-trash"></i></button>
+        </td>
+      </tr>`).join("")}</tbody>
+    </table></div>`;
+  } catch(e){ body.innerHTML = `<div class="text-danger small">Failed: ${esc(e.message)}</div>`; }
+}
+function settingsOpenCreateUser(){
+  $("settings-user-username").value = "";
+  $("settings-user-password").value = "";
+  settingsModals["m-settings-user"].show();
+}
+async function settingsSubmitUser(){
+  const body = {
+    username: $("settings-user-username").value.trim(),
+    password: $("settings-user-password").value,
+  };
+  if(!body.username || !body.password){ toast("Username and password required"); return; }
+  try {
+    await apiMutate("/dashboard/api/settings/users", "POST", body);
+    settingsModals["m-settings-user"].hide();
+    toast("User created");
+    settingsLoadUsers();
+  } catch(e){ toast("Create failed: "+e.message); }
+}
+async function settingsDeleteUser(username){
+  if(!confirm(`Delete user "${username}"?`)) return;
+  try {
+    await apiMutate("/dashboard/api/settings/users/"+encodeURIComponent(username), "DELETE");
+    toast("User deleted");
+    settingsLoadUsers();
+  } catch(e){ toast("Delete failed: "+e.message); }
+}
+function settingsOpenPassword(username){
+  $("settings-pw-user").value = username;
+  $("settings-pw-new").value = "";
+  settingsModals["m-settings-password"].show();
+}
+async function settingsSubmitPassword(){
+  const user = $("settings-pw-user").value;
+  const pw = $("settings-pw-new").value;
+  if(!pw){ toast("Password required"); return; }
+  try {
+    await apiMutate("/dashboard/api/settings/users/"+encodeURIComponent(user)+"/password", "PUT", { new_password: pw });
+    settingsModals["m-settings-password"].hide();
+    toast("Password changed");
+  } catch(e){ toast("Change failed: "+e.message); }
+}
+async function settingsUnlockUser(username){
+  try {
+    await apiMutate("/dashboard/api/settings/users/"+encodeURIComponent(username)+"/unlock", "POST", {});
+    toast("User unlocked");
+    settingsLoadUsers();
+  } catch(e){ toast("Unlock failed: "+e.message); }
+}
+
+// ── Settings: Sessions ─────────────────────────────────────────────────────
+async function settingsLoadSessions(){
+  const body = $("settings-sessions-body");
+  try {
+    const sessions = await apiGet("/dashboard/api/settings/sessions");
+    if(!sessions.length){ body.innerHTML = '<div class="text-muted small py-3">No active sessions.</div>'; return; }
+    body.innerHTML = `<div class="table-responsive"><table class="table table-sm">
+      <thead><tr><th>Username</th><th>Session ID</th><th>Created</th><th>Expires</th><th></th></tr></thead>
+      <tbody>${sessions.map(s => `<tr>
+        <td>${esc(s.username)}</td>
+        <td class="id-mono">${esc(s.session_id.slice(0,12))}…</td>
+        <td class="small">${fmtDate(s.created_at)}</td>
+        <td class="small">${fmtDate(s.expires_at)}</td>
+        <td><button class="btn btn-sm btn-outline-danger py-0 px-1" onclick="settingsRevokeSession('${esc(s.session_id)}')" title="Revoke"><i class="bi bi-x-circle"></i></button></td>
+      </tr>`).join("")}</tbody>
+    </table></div>`;
+  } catch(e){ body.innerHTML = `<div class="text-danger small">Failed: ${esc(e.message)}</div>`; }
+}
+async function settingsRevokeSession(sid){
+  if(!confirm("Revoke this session? The user will be logged out.")) return;
+  try {
+    await apiMutate("/dashboard/api/settings/sessions/"+encodeURIComponent(sid), "DELETE");
+    toast("Session revoked");
+    settingsLoadSessions();
+  } catch(e){ toast("Revoke failed: "+e.message); }
+}
+
+// ── Settings: OAuth2 Tokens (AI agent refresh tokens) ──────────────────────
+async function settingsLoadTokens(){
+  const body = $("settings-tokens-body");
+  try {
+    const tokens = await apiGet("/dashboard/api/settings/tokens");
+    if(!tokens.length){ body.innerHTML = '<div class="text-muted small py-3">No active OAuth2 tokens. AI agents that authenticate via OAuth2 will appear here.</div>'; return; }
+    body.innerHTML = `<div class="table-responsive"><table class="table table-sm">
+      <thead><tr><th>Client ID</th><th>User</th><th>Scope</th><th>Token</th><th>Created</th><th>Expires</th><th></th></tr></thead>
+      <tbody>${tokens.map(t => `<tr>
+        <td class="id-mono">${esc(t.client_id)}</td>
+        <td>${esc(t.username)}</td>
+        <td><span class="badge bg-info">${esc(t.scope || "—")}</span></td>
+        <td class="id-mono small" title="${esc(t.token_hash)}">${esc(t.token_hash.slice(0,12))}…</td>
+        <td class="small">${fmtDate(t.created_at)}</td>
+        <td class="small">${fmtDate(t.expires_at)}</td>
+        <td><button class="btn btn-sm btn-outline-danger py-0 px-1" onclick="settingsRevokeToken('${esc(t.token_hash)}')" title="Revoke token"><i class="bi bi-x-circle"></i></button></td>
+      </tr>`).join("")}</tbody>
+    </table></div>`;
+  } catch(e){ body.innerHTML = `<div class="text-danger small">Failed: ${esc(e.message)}</div>`; }
+}
+async function settingsRevokeToken(hash){
+  if(!confirm("Revoke this OAuth2 token? The AI agent will need to re-authenticate after its current access token expires.")) return;
+  try {
+    await apiMutate("/dashboard/api/settings/tokens/"+encodeURIComponent(hash), "DELETE");
+    toast("Token revoked");
+    settingsLoadTokens();
+  } catch(e){ toast("Revoke failed: "+e.message); }
 }
 
 routeHash();

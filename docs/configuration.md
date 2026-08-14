@@ -433,6 +433,25 @@ The dashboard SPA talks to a clean REST contract owned by `uteke-web`; the brows
 
 **Slug / room_id naming convention:** `escaped_title + "-" + random_suffix` where `escaped_title` = lowercase(title) → replace spaces & periods with `-` → strip non-alphanumeric (dashes preserved) → trim leading/trailing dashes. `random_suffix` = 6 alphanumeric characters (a-z0-9). The server collision-checks against the store before insert and regenerates the suffix on conflict (up to 5 retries).
 
+#### Settings (`/dashboard/api/settings`)
+
+Credentials & session management — operates on the local `uteke-web.db` auth store (no upstream call). All require session; mutations require CSRF.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/dashboard/api/settings/clients` | List OAuth2 clients |
+| `POST` | `/dashboard/api/settings/clients` | Register client (`{client_id, client_secret?, redirect_uris?, public?}`) — CSRF |
+| `DELETE` | `/dashboard/api/settings/clients/{id}` | Delete client — CSRF |
+| `GET` | `/dashboard/api/settings/users` | List dashboard users |
+| `POST` | `/dashboard/api/settings/users` | Create user (`{username, password}`) — CSRF |
+| `DELETE` | `/dashboard/api/settings/users/{id}` | Delete user (prevents self-deletion) — CSRF |
+| `PUT` | `/dashboard/api/settings/users/{id}/password` | Change password (`{new_password}`) — CSRF |
+| `POST` | `/dashboard/api/settings/users/{id}/unlock` | Unlock locked user — CSRF |
+| `GET` | `/dashboard/api/settings/sessions` | List active sessions |
+| `DELETE` | `/dashboard/api/settings/sessions/{id}` | Revoke session (prevents self-revocation) — CSRF |
+| `GET` | `/dashboard/api/settings/tokens` | List active OAuth2 refresh tokens (AI agent sessions) |
+| `DELETE` | `/dashboard/api/settings/tokens/{hash}` | Revoke OAuth2 refresh token by hash — CSRF |
+
 ## Per-Project Config
 
 Place a `.uteke/uteke.toml` in your project root to override defaults for that project:

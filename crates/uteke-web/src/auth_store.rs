@@ -91,6 +91,18 @@ pub struct RefreshToken {
     pub used: bool,
 }
 
+/// Refresh token info for the settings page (admin view).
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct RefreshTokenInfo {
+    pub token_hash: String,
+    pub client_id: String,
+    pub username: String,
+    pub scope: String,
+    pub created_at: String,
+    pub expires_at: String,
+}
+
 /// Session record.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -564,6 +576,45 @@ impl AuthStore {
         Ok(())
     }
 
+    /// Revoke a refresh token by its hash (for admin revocation from the
+    /// dashboard settings page, where we don't have the plaintext token).
+    pub fn revoke_refresh_token_by_hash(&self, hash: &str) -> Result<usize, AuthError> {
+        let conn = self.conn.lock().expect("auth store mutex poisoned");
+        let n = conn.execute(
+            "UPDATE refresh_tokens SET used = 1 WHERE token_hash = ?1 AND used = 0",
+            rusqlite::params![hash],
+        )?;
+        Ok(n)
+    }
+
+    /// List all active (not used, not expired) refresh tokens.
+    /// Used by the settings page to show AI agent OAuth2 sessions.
+    /// Returns (token_hash, client_id, username, scope, created_at, expires_at).
+    pub fn list_refresh_tokens(&self) -> Result<Vec<RefreshTokenInfo>, AuthError> {
+        let conn = self.conn.lock().expect("auth store mutex poisoned");
+        let now = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let mut stmt = conn.prepare(
+            "SELECT token_hash, client_id, username, scope, created_at, expires_at
+             FROM refresh_tokens WHERE used = 0 AND expires_at >= ?1
+             ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![now], |r| {
+            Ok(RefreshTokenInfo {
+                token_hash: r.get(0)?,
+                client_id: r.get(1)?,
+                username: r.get(2)?,
+                scope: r.get(3)?,
+                created_at: r.get(4)?,
+                expires_at: r.get(5)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     // ── Sessions ─────────────────────────────────────────────────────────────
 
     /// Create a new server-side session.
@@ -628,6 +679,30 @@ impl AuthStore {
             rusqlite::params![session_id],
         )?;
         Ok(())
+    }
+
+    /// List all active sessions (not expired). Used by the settings page.
+    pub fn list_sessions(&self) -> Result<Vec<Session>, AuthError> {
+        let conn = self.conn.lock().expect("auth store mutex poisoned");
+        let now = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let mut stmt = conn.prepare(
+            "SELECT session_id, username, csrf_token, created_at, expires_at
+             FROM sessions WHERE expires_at >= ?1 ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![now], |r| {
+            Ok(Session {
+                session_id: r.get(0)?,
+                username: r.get(1)?,
+                csrf_token: r.get(2)?,
+                created_at: r.get(3)?,
+                expires_at: r.get(4)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
     }
 
     /// Purge expired sessions (maintenance).

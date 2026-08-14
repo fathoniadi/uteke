@@ -12,7 +12,7 @@
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Json, Redirect, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use serde::Deserialize;
 
 use crate::session;
@@ -157,6 +157,52 @@ pub fn dashboard_router() -> axum::Router<AppState> {
         .route(
             "/dashboard/api/documents/{slug}/rooms",
             get(dashboard_api::handle_document_rooms),
+        )
+        // Settings — OAuth2 clients CRUD (local auth store, no upstream).
+        .route(
+            "/dashboard/api/settings/clients",
+            get(dashboard_api::handle_settings_list_clients)
+                .post(dashboard_api::handle_settings_create_client),
+        )
+        .route(
+            "/dashboard/api/settings/clients/{id}",
+            delete(dashboard_api::handle_settings_delete_client),
+        )
+        // Settings — dashboard users CRUD (local auth store).
+        .route(
+            "/dashboard/api/settings/users",
+            get(dashboard_api::handle_settings_list_users)
+                .post(dashboard_api::handle_settings_create_user),
+        )
+        .route(
+            "/dashboard/api/settings/users/{id}",
+            delete(dashboard_api::handle_settings_delete_user),
+        )
+        .route(
+            "/dashboard/api/settings/users/{id}/password",
+            put(dashboard_api::handle_settings_change_password),
+        )
+        .route(
+            "/dashboard/api/settings/users/{id}/unlock",
+            post(dashboard_api::handle_settings_unlock_user),
+        )
+        // Settings — sessions (list + revoke).
+        .route(
+            "/dashboard/api/settings/sessions",
+            get(dashboard_api::handle_settings_list_sessions),
+        )
+        .route(
+            "/dashboard/api/settings/sessions/{id}",
+            delete(dashboard_api::handle_settings_revoke_session),
+        )
+        // Settings — OAuth2 tokens (AI agent refresh tokens, list + revoke).
+        .route(
+            "/dashboard/api/settings/tokens",
+            get(dashboard_api::handle_settings_list_tokens),
+        )
+        .route(
+            "/dashboard/api/settings/tokens/{hash}",
+            delete(dashboard_api::handle_settings_revoke_token),
         )
 }
 

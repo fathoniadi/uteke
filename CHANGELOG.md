@@ -2,6 +2,15 @@
 
 ### Added
 
+- **uteke-web dashboard: Settings page** — Full credentials & session management UI in the dashboard. Four tabs: OAuth2 Clients, Users, Sessions, OAuth2 Tokens.
+  - **OAuth2 Clients tab** — list all registered clients (client_id, redirect URIs, public flag, created date). Add client modal (client_id, secret, redirect URI, public checkbox). Delete client with confirm. Wraps `AuthStore::list_clients`, `add_client`, `delete_client` — no upstream call needed.
+  - **Users tab** — list all dashboard users (username, status badge, failed attempts, created date). Add user modal (username, password). Change password modal. Unlock locked user button. Delete user with confirm (prevents self-deletion). Wraps `AuthStore::list_users`, `add_user`, `delete_user`, `change_password`, `unlock_user`.
+  - **Sessions tab** — list all active sessions (username, session ID prefix, created, expires). Revoke session button (prevents self-revocation — use logout instead). Wraps new `AuthStore::list_sessions` + `delete_session`.
+  - **OAuth2 Tokens tab** — list all active OAuth2 refresh tokens (client_id, username, scope, token hash prefix, created, expires). Revoke token button — forces AI agents (MCP clients) to re-authenticate after their current access token expires. Wraps new `AuthStore::list_refresh_tokens` + `revoke_refresh_token_by_hash`.
+  - **New API endpoints** (12 routes under `/dashboard/api/settings/*`): `GET/POST /settings/clients`, `DELETE /settings/clients/{id}`, `GET/POST /settings/users`, `DELETE /settings/users/{id}`, `PUT /settings/users/{id}/password`, `POST /settings/users/{id}/unlock`, `GET /settings/sessions`, `DELETE /settings/sessions/{id}`, `GET /settings/tokens`, `DELETE /settings/tokens/{hash}`. All require session; mutations require CSRF.
+  - **New AuthStore methods**: `list_sessions()` — returns all non-expired sessions, ordered by created_at DESC; `list_refresh_tokens()` — returns all active (not used, not expired) refresh tokens; `revoke_refresh_token_by_hash(hash)` — revokes a refresh token by its SHA-256 hash (for admin revocation without the plaintext token).
+  - **Tests**: 25 integration tests in `tests/settings_api.rs` — auth gating, CSRF, happy path for all 12 endpoints, input validation, self-deletion prevention, self-revocation prevention, duplicate user rejection, token revocation.
+
 - **uteke-web dashboard: Tier 1 API wrappers + UI** — 13 new dashboard API endpoints wrapping uteke-server features that were previously only accessible via CLI/MCP. All require session; mutations require CSRF.
   - **Room summary** (`GET /dashboard/api/rooms/{id}/summary`) — topic clusters, participants, time range, top tags, recent decisions, pinned highlights. Rendered as a card in room detail view.
   - **Room summary document** (`GET /dashboard/api/rooms/{id}/summary-document`) — structured meeting minutes grouped by memory type (Pinned, Decisions, Facts, Procedures, etc.). Rendered as a card in room detail view.
