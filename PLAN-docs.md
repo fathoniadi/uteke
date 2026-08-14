@@ -37,7 +37,7 @@ Wrap endpoint `/doc/*` uteke-server. Semua handler pakai `require_session` (+ `r
 | `/dashboard/api/documents/search` | GET | ❌ | `/doc/search` | param `q` + `mode` (hybrid/semantic/fts) — read-only |
 | `/dashboard/api/documents/{slug}` | GET | ❌ | `/doc/get` | detail by slug |
 | `/dashboard/api/documents/{slug}/mem-refs` | GET | ❌ | `/doc/mem-refs` | memori yang merefer doc (opsional) |
-| `/dashboard/api/documents` | POST | ✅ **wajib** | `/doc/create` | body: slug, title, content, tags, parent |
+| `/dashboard/api/documents` | POST | ✅ **wajib** | `/doc/create` | body: title, content, tags, parent — **slug auto-generated** dari title/first heading |
 | `/dashboard/api/documents/{slug}` | PUT | ✅ **wajib** | `/doc/update` | partial update |
 | `/dashboard/api/documents/{slug}` | DELETE | ✅ **wajib** | `/doc/delete` | hapus + cascade chunk |
 | `/dashboard/api/documents/{slug}/move` | POST | ✅ **wajib** | `/doc/move` | body: new_parent |
@@ -48,7 +48,7 @@ Catatan implementasi:
   - `DashboardDocument` — untuk get/create/update (wrap `Document`). Field: `id, slug, title, content, tags, parent_id, depth, has_children, sort_order, version, created_at, updated_at`. Plus optional `metadata, author, content_type, path` kalau perlu.
   - Untuk search results, tambah field optional `score, chunk_heading, chunk_snippet, mode` di struct terpisah `DashboardDocumentSearchResult` (atau flatten ke summary dengan field optional).
 - `parent_id` di response = **UUID** (`Document.parent_id: Option<String>`). Tapi request `DocCreateRequest.parent` & `DocMoveRequest.new_parent` pakai **slug**. Frontend parent picker kirim slug; display parent di tree/breadcrumb perlu lookup slug→title terpisah (atau pakai `doc_breadcrumbs` upstream — ada di `lib.rs:1559`).
-- `slug` unik global; validasi slug di frontend + serahkan ke uteke-server (dia auto-migrasi duplicate).
+- `slug` unik global; **slug di-auto-generate oleh dashboard API** dari title (atau first heading di content) mengikuti uteke naming convention (`escaped_title + "-" + random_suffix`, collision-checked). Client-supplied slug di-ignore.
 - **Max depth 10** — `doc_upsert_with_parent` & `doc_move` reject kalau exceed (`lib.rs:1292`). Frontend parent picker harus cek depth atau tangani error 400 dari upstream.
 - **CSRF per-handler, BUKAN middleware `axum-csrf`** — ikut pattern `dashboard_api.rs` yang ada: `require_csrf()` cek header `x-csrf-token` (double-submit token) untuk semua mutasi.
 - **Semua mutasi** (POST create, PUT update, DELETE delete, POST move) = `require_session` + `require_csrf`. **Read-only** (GET list/search/get/mem-refs) = `require_session` saja.
@@ -62,7 +62,7 @@ Catatan implementasi:
 
 1. **List view** (`#/documents`): tree indented (parent-child) + tombol "New document" + search box + mode selector.
 2. **Detail view** (`#/documents/{slug}`): render markdown + breadcrumb + tombol Edit / Move / Delete + panel mem-refs (opsional).
-3. **Create/Edit modal** (atau view): editor **EasyMDE** (toolbar + live preview) + field slug, title, tags, parent picker.
+3. **Create/Edit modal** (atau view): editor **EasyMDE** (toolbar + live preview) + field title, tags, parent picker. **Slug di-auto-generate server-side** — tidak ada input slug di form.
 4. **Search**: hasil hybrid dengan snippet + heading chunk.
 5. **Empty/loading/error state** per view (konsisten memory section).
 

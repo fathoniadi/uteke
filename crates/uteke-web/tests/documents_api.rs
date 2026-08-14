@@ -48,8 +48,19 @@ async fn spawn_doc_upstream() -> std::net::SocketAddr {
     async fn doc_list(_b: String) -> impl IntoResponse {
         (StatusCode::OK, format!("[{DOC_SUMMARY_JSON}]"))
     }
-    async fn doc_get(_b: String) -> impl IntoResponse {
-        (StatusCode::OK, DOC_FULL_JSON.to_string())
+    async fn doc_get(b: String) -> impl IntoResponse {
+        // Return the document only for the known slug "deploy-runbook";
+        // return null for any other slug so the auto-generation collision
+        // check sees them as available.
+        let slug = serde_json::from_str::<serde_json::Value>(&b)
+            .ok()
+            .and_then(|v| v.get("slug").and_then(|s| s.as_str()).map(String::from))
+            .unwrap_or_default();
+        if slug == "deploy-runbook" {
+            (StatusCode::OK, DOC_FULL_JSON.to_string())
+        } else {
+            (StatusCode::OK, "null".to_string())
+        }
     }
     async fn doc_search(_b: String) -> impl IntoResponse {
         (StatusCode::OK, format!("[{DOC_SEARCH_JSON}]"))
@@ -519,7 +530,7 @@ async fn doc_create_returns_full_document() {
                 .header("x-csrf-token", &csrf)
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r##"{"slug":"deploy-runbook","title":"Deploy Runbook","content":"# Deploy","tags":["ops"]}"##,
+                    r##"{"title":"Deploy Runbook","content":"# Deploy","tags":["ops"]}"##,
                 ))
                 .unwrap(),
         )
@@ -534,7 +545,10 @@ async fn doc_create_returns_full_document() {
 }
 
 #[tokio::test]
-async fn doc_create_rejects_empty_slug() {
+async fn doc_create_auto_generates_slug_from_title() {
+    // The dashboard API ignores any client-supplied slug and auto-generates
+    // one from the title. The response carries the upstream document, whose
+    // slug is whatever the upstream /doc/create returned.
     let upstream = spawn_doc_upstream().await;
     let app = TestApp::with_upstream(upstream).await;
     let (cookie, csrf) = make_session(&app, "alice");
@@ -548,12 +562,13 @@ async fn doc_create_rejects_empty_slug() {
                 .header("cookie", &cookie)
                 .header("x-csrf-token", &csrf)
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"slug":"","content":"hello"}"#))
+                // No title either — slug should be derived from first heading.
+                .body(Body::from(r##"{"content":"# Hello World\nbody"}"##))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(resp.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -571,7 +586,7 @@ async fn doc_create_rejects_empty_content() {
                 .header("cookie", &cookie)
                 .header("x-csrf-token", &csrf)
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"slug":"test","content":"  "}"#))
+                .body(Body::from(r#"{"content":"  "}"#))
                 .unwrap(),
         )
         .await

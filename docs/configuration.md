@@ -390,6 +390,35 @@ The dashboard SPA talks to a clean REST contract owned by `uteke-web`; the brows
 
 `memory_type` is validated against the fixed taxonomy: `fact`, `procedure`, `preference`, `decision`, `context`, `note`, `insight`, `reference`, `event`. Invalid values are dropped.
 
+#### Documents (`/dashboard/api/documents`)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/dashboard/api/documents` | List (`?roots_only=&parent=&limit=`) |
+| `GET` | `/dashboard/api/documents/search` | Search (`?q=&mode=hybrid\|semantic\|fts&limit=`) |
+| `GET` | `/dashboard/api/documents/{slug}` | Document detail |
+| `GET` | `/dashboard/api/documents/{slug}/mem-refs` | Memories referencing this document |
+| `POST` | `/dashboard/api/documents` | Create — body `{content, title?, tags?, parent?}`. **`slug` is auto-generated** from `title` (or first Markdown heading in `content`) per the uteke naming convention. A client-supplied `slug` field is accepted but ignored. |
+| `PUT` | `/dashboard/api/documents/{slug}` | Partial update (`{title?, content?, tags?}`) |
+| `DELETE` | `/dashboard/api/documents/{slug}` | Delete + cascade to children/chunks |
+| `POST` | `/dashboard/api/documents/{slug}/move` | Move (`{new_parent?}` — omit for root) |
+
+#### Rooms (`/dashboard/api/rooms`)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/dashboard/api/rooms` | List (`?namespace=`) |
+| `POST` | `/dashboard/api/rooms` | Create — body `{title?, namespace?}`. **`room_id` is auto-generated** from `title` per the uteke naming convention. A client-supplied `room_id` field is accepted but ignored. |
+| `GET` | `/dashboard/api/rooms/{id}` | Room stats |
+| `DELETE` | `/dashboard/api/rooms/{id}` | Delete room (memories preserved) |
+| `GET` | `/dashboard/api/rooms/{id}/memories` | List memories in room (`?author=&limit=`) |
+| `POST` | `/dashboard/api/rooms/{id}/memories` | Add memory to room (`{content, tags?, memory_type?, author?}`) |
+| `GET` | `/dashboard/api/rooms/{id}/documents` | List documents linked to room |
+| `POST` | `/dashboard/api/rooms/{id}/documents` | Link document (`{doc_slug}`) |
+| `DELETE` | `/dashboard/api/rooms/{id}/documents` | Unlink document (`{doc_slug}`) |
+
+**Slug / room_id naming convention:** `escaped_title + "-" + random_suffix` where `escaped_title` = lowercase(title) → replace spaces & periods with `-` → strip non-alphanumeric (dashes preserved) → trim leading/trailing dashes. `random_suffix` = 6 alphanumeric characters (a-z0-9). The server collision-checks against the store before insert and regenerates the suffix on conflict (up to 5 retries).
+
 ## Per-Project Config
 
 Place a `.uteke/uteke.toml` in your project root to override defaults for that project:
