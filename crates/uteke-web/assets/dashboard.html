@@ -348,7 +348,13 @@
   <main class="container-fluid py-3" style="max-width:1180px;">
     <div class="d-flex align-items-center mb-3">
       <h4 class="mb-0">Knowledge Graph</h4>
-      <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="graphLoad()" title="Refresh"><i class="bi bi-arrow-clockwise"></i></button>
+      <div class="ms-auto d-flex align-items-center gap-2">
+        <select id="graph-renderer" class="form-select form-select-sm" style="width:auto;" onchange="graphLoad()">
+          <option value="vis">vis.js</option>
+          <option value="cytoscape">Cytoscape.js</option>
+        </select>
+        <button class="btn btn-sm btn-outline-secondary" onclick="graphLoad()" title="Refresh"><i class="bi bi-arrow-clockwise"></i></button>
+      </div>
     </div>
     <div class="card mb-3">
       <div class="card-body py-2">
@@ -610,6 +616,7 @@
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/easymde@2.18.0/dist/easymde.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
 <script>
 const TYPES = ["fact","procedure","preference","decision","context","note","insight","reference","event"];
 let S = { q:"", mode:"list", ns:"", tag:"", sort:"created:desc", offset:0, limit:20, rows:[], hasMore:false };
@@ -1873,54 +1880,120 @@ function initDocs(){
 initDocs();
 initRooms();
 
-// ── Graph visualization (vis.js) ───────────────────────────────────────────
-let graphNetwork = null;
+// ── Graph visualization (vis.js / Cytoscape.js) ────────────────────────────
+let graphNetwork = null;   // vis.js instance
+let graphCytoscape = null; // Cytoscape.js instance
+let graphCacheData = null; // cached raw data for renderer switch
+
 async function graphLoad(){
   const container = $("graph-viz");
   const empty = $("graph-empty");
   if(!container) return;
   container.style.display = "";
   empty.style.display = "none";
-  try {
-    // Use any memory ID — the graph endpoint returns the full graph.
-    // We use a dummy ID since the backend ignores it for /graph.
-    const data = await apiGet("/dashboard/api/memories/00000000-0000-0000-0000-000000000000/graph");
-    const nodes = (data.nodes || []).map(n => ({
-      id: n.id,
-      label: n.label || n.id.slice(0, 8),
-      title: n.entity_type ? `${n.entity_type}: ${n.label}` : n.label,
-      group: n.entity_type || "default",
-    }));
-    const edges = (data.edges || []).map(e => ({
-      from: e.source_id,
-      to: e.target_id,
-      label: e.relation,
-      arrows: "to",
-      width: Math.max(1, e.weight || 1),
-    }));
-    // Stats
-    $("graph-stat-nodes").textContent = (data.stats && data.stats.node_count) || nodes.length;
-    $("graph-stat-edges").textContent = (data.stats && data.stats.edge_count) || edges.length;
-    $("graph-stat-relations").textContent = (data.stats && data.stats.relation_types && data.stats.relation_types.length) || 0;
-    if(!nodes.length){
+
+  // Fetch data once (or reuse cache if already loaded).
+  if(!graphCacheData){
+    try {
+      graphCacheData = await apiGet("/dashboard/api/memories/00000000-0000-0000-0000-000000000000/graph");
+    } catch(e){
       container.style.display = "none";
       empty.style.display = "";
+      empty.textContent = "Failed to load graph: " + e.message;
       return;
     }
-    const visData = { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) };
-    const options = {
-      nodes: { shape: "dot", size: 16, font: { size: 12 } },
-      edges: { font: { size: 10, align: "middle" }, smooth: { type: "continuous" } },
-      physics: { stabilization: { iterations: 100 }, barnesHut: { gravitationalConstant: -2000 } },
-      interaction: { hover: true, tooltipDelay: 200 },
-    };
-    if(graphNetwork) graphNetwork.destroy();
-    graphNetwork = new vis.Network(container, visData, options);
-  } catch(e){
+  }
+  const data = graphCacheData;
+  const nodes = (data.nodes || []).map(n => ({
+    id: n.id,
+    label: n.label || n.id.slice(0, 8),
+    title: n.entity_type ? `${n.entity_type}: ${n.label}` : n.label,
+    group: n.entity_type || "default",
+  }));
+  const edges = (data.edges || []).map(e => ({
+    from: e.source_id,
+    to: e.target_id,
+    label: e.relation,
+    arrows: "to",
+    width: Math.max(1, e.weight || 1),
+  }));
+
+  // Stats
+  $("graph-stat-nodes").textContent = (data.stats && data.stats.node_count) || nodes.length;
+  $("graph-stat-edges").textContent = (data.stats && data.stats.edge_count) || edges.length;
+  $("graph-stat-relations").textContent = (data.stats && data.stats.relation_types && data.stats.relation_types.length) || 0;
+
+  if(!nodes.length){
     container.style.display = "none";
     empty.style.display = "";
-    empty.textContent = "Failed to load graph: " + e.message;
+    return;
   }
+
+  // Destroy previous renderer instance.
+  if(graphNetwork){ graphNetwork.destroy(); graphNetwork = null; }
+  if(graphCytoscape){ graphCytoscape.destroy(); graphCytoscape = null; }
+  container.innerHTML = "";
+
+  const renderer = $("graph-renderer").value;
+  if(renderer === "cytoscape"){
+    graphRenderCytoscape(container, nodes, edges);
+  } else {
+    graphRenderVis(container, nodes, edges);
+  }
+}
+
+// ── vis.js renderer ────────────────────────────────────────────────────────
+function graphRenderVis(container, nodes, edges){
+  const visData = { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) };
+  const options = {
+    nodes: { shape: "box", size: 28, font: { size: 16, face: "sans-serif" }, margin: 10, widthConstraint: { minimum: 80 } },
+    edges: { font: { size: 12, align: "middle" }, smooth: { type: "continuous" } },
+    physics: { stabilization: { iterations: 100 }, barnesHut: { gravitationalConstant: -2000 } },
+    interaction: { hover: true, tooltipDelay: 200 },
+  };
+  graphNetwork = new vis.Network(container, visData, options);
+}
+
+// ── Cytoscape.js renderer ──────────────────────────────────────────────────
+function graphRenderCytoscape(container, nodes, edges){
+  const cyNodes = nodes.map(n => ({ data: { id: n.id, label: n.label, type: n.group } }));
+  const cyEdges = edges.map(e => ({ data: { id: `${e.from}-${e.to}`, source: e.from, target: e.to, label: e.label } }));
+  graphCytoscape = cytoscape({
+    container: container,
+    elements: [...cyNodes, ...cyEdges],
+    style: [
+      { selector: "node", style: {
+        "label": "data(label)",
+        "text-valign": "center",
+        "text-halign": "center",
+        "background-color": "#3b82f6",
+        "color": "#fff",
+        "font-size": "14px",
+        "width": "label",
+        "height": "label",
+        "padding": "12px",
+        "shape": "round-rectangle",
+        "text-wrap": "wrap",
+        "text-max-width": "120px",
+      }},
+      { selector: "node[type='person']", style: { "background-color": "#10b981" } },
+      { selector: "node[type='organization']", style: { "background-color": "#f59e0b" } },
+      { selector: "node[type='location']", style: { "background-color": "#8b5cf6" } },
+      { selector: "edge", style: {
+        "label": "data(label)",
+        "curve-style": "bezier",
+        "target-arrow-shape": "triangle",
+        "arrow-scale": 1.2,
+        "line-color": "#94a3b8",
+        "target-arrow-color": "#94a3b8",
+        "color": "#64748b",
+        "font-size": "11px",
+        "text-rotation": "autorotate",
+        "width": 2,
+      }},
+    ],
+    layout: { name: "cose", animate: true, nodeDimensionsIncludeLabels: true, idealEdgeLength: 120, nodeRepulsion: 8000 },
+  });
 }
 
 routeHash();
