@@ -296,6 +296,21 @@ Both expose the same HTTP API. Other agents and tools connect via `http://your-h
 
 📖 **[Docker setup guide](docs/docker.md)** · [Server mode docs](docs/configuration.md#server-mode)
 
+### uteke-web: OAuth2 Gateway + Dashboard (optional)
+
+For teams or remote setups that need auth in front of `uteke-serve`, `uteke-web` is a single Rust binary combining an OAuth2 authorization server, a reverse proxy, and a web dashboard:
+
+```bash
+uteke-web serve
+```
+
+- **OAuth2 auth server** — authorize/token/register/metadata/profile endpoints, JWT-based sessions
+- **Reverse proxy** — sits in front of `uteke-serve`, injects the upstream token, enforces auth on every request
+- **Dashboard** — browser UI for rooms, memories, documents, and stats, with 4 selectable themes (indigo, slate, warm, mono) and light/dark mode
+- **Static or JWT auth** — static token, read-only token, or full OAuth2 login depending on config
+
+Config lives under `[web]` and `[web.dashboard]` in `uteke.toml` (`listen`, `issuer`, `upstream`, `jwt_secret`, `db_path`, `session_ttl_hours`). See `crates/uteke-web/` for source.
+
 ---
 
 ## 🏗️ Architecture
