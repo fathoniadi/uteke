@@ -55,6 +55,10 @@ pub fn dashboard_router() -> axum::Router<AppState> {
                 .put(dashboard_api::handle_update_memory)
                 .delete(dashboard_api::handle_forget_memory),
         )
+        .route(
+            "/dashboard/api/memories/{id}/doc-refs",
+            get(dashboard_api::handle_memory_doc_refs),
+        )
         .route("/dashboard/api/tags", get(dashboard_api::handle_tags))
         .route(
             "/dashboard/api/namespaces",

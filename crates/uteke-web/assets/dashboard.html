@@ -658,9 +658,25 @@ async function openDetail(id){
         <dt class="col-sm-3">Namespace</dt><dd class="col-sm-9">${esc(m.namespace||"—")}</dd>
         <dt class="col-sm-3">Created</dt><dd class="col-sm-9">${fmtDate(m.created_at)}</dd>
         ${m.score!=null ? `<dt class="col-sm-3">Score</dt><dd class="col-sm-9">${m.score.toFixed(3)}</dd>` : ""}
+        <dt class="col-sm-3">Documents</dt><dd class="col-sm-9" id="detail-docrefs"><span class="text-muted small">Loading…</span></dd>
       </dl>`;
     openModal("m-detail");
+    // Load doc-refs (optional, non-fatal) — documents referenced via [[slug]].
+    loadDetailDocRefs(m.id);
   } catch(e){ toast("Failed: "+e.message); }
+}
+
+// Fetch documents referenced by a memory and render them as links.
+// Empty or error → show "—" (non-fatal, never blocks the detail modal).
+async function loadDetailDocRefs(id){
+  const dd = $("detail-docrefs");
+  try {
+    const refs = await apiGet("/dashboard/api/memories/"+encodeURIComponent(id)+"/doc-refs");
+    const slugs = (refs && refs.doc_slugs) || [];
+    dd.innerHTML = slugs.length
+      ? slugs.map(s => `<a href="#/documents/${encodeURIComponent(s)}" class="badge bg-light text-dark border me-1 mb-1 text-decoration-none"><i class="bi bi-file-earmark-text me-1"></i>${esc(s)}</a>`).join("")
+      : "—";
+  } catch(_){ dd.innerHTML = "—"; }
 }
 function editFromDetail(){ if(detailMem){ closeModal("m-detail"); openEdit(detailMem.id); } }
 function forgetFromDetail(){ if(detailMem){ const id=detailMem.id; closeModal("m-detail"); openForget(id, shortId(id)); } }

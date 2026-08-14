@@ -475,6 +475,35 @@ pub async fn handle_get_memory(
     }
 }
 
+/// `GET /dashboard/api/memories/{id}/doc-refs` — documents referenced by a memory.
+/// Wraps upstream `POST /memory/doc-refs` (note: upstream field is `memory_id`).
+/// Returns `{ "memory_id": "...", "doc_slugs": [...] }`; empty array when the
+/// memory has no `[[doc-slug]]` wikilinks.
+pub async fn handle_memory_doc_refs(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let _sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let client = UtekeClient::new(&state);
+    let body = serde_json::json!({ "memory_id": id });
+    let resp = match client.post("/memory/doc-refs", &body).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
 /// `POST /dashboard/api/memories` — create.
 pub async fn handle_create_memory(
     State(state): State<AppState>,
