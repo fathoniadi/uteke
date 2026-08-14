@@ -112,6 +112,9 @@ pub struct Session {
     pub csrf_token: String,
     pub created_at: String,
     pub expires_at: String,
+    /// SHA-256 hash of the OAuth2 refresh token issued at login, so it can
+    /// be revoked when the dashboard session is logged out (#logout-revoke).
+    pub refresh_token_hash: Option<String>,
 }
 
 // ── Store ───────────────────────────────────────────────────────────────────
@@ -151,6 +154,13 @@ impl AuthStore {
             // Ensure version row exists (schema SQL inserts v1).
             tracing::info!("uteke-web auth store migrated to v{CURRENT_VERSION}");
         }
+        // Additive column for existing v1 databases that predate the
+        // logout-revoke fix. CREATE TABLE IF NOT EXISTS in SCHEMA_V1 does
+        // not retrofit already-created tables, so add it here idempotently.
+        let _ = conn.execute(
+            "ALTER TABLE sessions ADD COLUMN refresh_token_hash TEXT",
+            [],
+        );
         Ok(())
     }
 
@@ -640,7 +650,23 @@ impl AuthStore {
             csrf_token: csrf_token.to_string(),
             created_at: Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
             expires_at,
+            refresh_token_hash: None,
         })
+    }
+
+    /// Attach the hash of the OAuth2 refresh token issued at login to a
+    /// session, so it can be revoked on logout.
+    pub fn set_session_refresh_token(
+        &self,
+        session_id: &str,
+        token_hash: &str,
+    ) -> Result<(), AuthError> {
+        let conn = self.conn.lock().expect("auth store mutex poisoned");
+        conn.execute(
+            "UPDATE sessions SET refresh_token_hash = ?1 WHERE session_id = ?2",
+            rusqlite::params![token_hash, session_id],
+        )?;
+        Ok(())
     }
 
     /// Look up a session by ID. Returns None if not found or expired.
@@ -648,7 +674,7 @@ impl AuthStore {
         let conn = self.conn.lock().expect("auth store mutex poisoned");
         let s: Option<Session> = conn
             .query_row(
-                "SELECT session_id, username, csrf_token, created_at, expires_at
+                "SELECT session_id, username, csrf_token, created_at, expires_at, refresh_token_hash
                  FROM sessions WHERE session_id = ?1",
                 rusqlite::params![session_id],
                 |r| {
@@ -658,6 +684,7 @@ impl AuthStore {
                         csrf_token: r.get(2)?,
                         created_at: r.get(3)?,
                         expires_at: r.get(4)?,
+                        refresh_token_hash: r.get(5)?,
                     })
                 },
             )
@@ -686,7 +713,7 @@ impl AuthStore {
         let conn = self.conn.lock().expect("auth store mutex poisoned");
         let now = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
         let mut stmt = conn.prepare(
-            "SELECT session_id, username, csrf_token, created_at, expires_at
+            "SELECT session_id, username, csrf_token, created_at, expires_at, refresh_token_hash
              FROM sessions WHERE expires_at >= ?1 ORDER BY created_at DESC",
         )?;
         let rows = stmt.query_map(rusqlite::params![now], |r| {
@@ -696,6 +723,7 @@ impl AuthStore {
                 csrf_token: r.get(2)?,
                 created_at: r.get(3)?,
                 expires_at: r.get(4)?,
+                refresh_token_hash: r.get(5)?,
             })
         })?;
         let mut out = Vec::new();

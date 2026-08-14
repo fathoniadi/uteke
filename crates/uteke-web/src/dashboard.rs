@@ -394,6 +394,15 @@ pub async fn dashboard_callback(
         tracing::error!("session store error: {e}");
         return (StatusCode::INTERNAL_SERVER_ERROR, "session error").into_response();
     }
+    // Attach the refresh token's hash to the session so logout can revoke
+    // it — otherwise it stays valid in the store after the dashboard
+    // session ends.
+    if let Some(refresh_token) = token_json.get("refresh_token").and_then(|v| v.as_str()) {
+        let hash = crate::auth_store::sha256_hex(refresh_token);
+        if let Err(e) = state.store.set_session_refresh_token(&session_id, &hash) {
+            tracing::warn!("failed to attach refresh token to session: {e}");
+        }
+    }
     // Set signed cookie + CSRF cookie, redirect to /dashboard.
     // SameSite=Lax (not Strict) — allows cookie on top-level redirect from
     // OAuth2 callback. Lax still blocks cross-site POST (CSRF protection).
@@ -420,6 +429,13 @@ pub async fn dashboard_callback(
 /// `POST /dashboard/logout` — delete session, clear cookies.
 pub async fn dashboard_logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Some(session_id) = extract_session(&headers, &state.config.jwt_secret) {
+        // Revoke the refresh token issued at login so it can't be used to
+        // mint new access tokens after the dashboard session ends.
+        if let Some(session) = state.store.get_session(&session_id) {
+            if let Some(hash) = session.refresh_token_hash {
+                let _ = state.store.revoke_refresh_token_by_hash(&hash);
+            }
+        }
         let _ = state.store.delete_session(&session_id);
     }
     let mut out = HeaderMap::new();
