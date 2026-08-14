@@ -24,6 +24,15 @@ pub fn build_app(state: AppState) -> Router {
 
     // Specific routes (matched first by axum's router).
     let local = Router::new()
+        // Root — explicit 404 so it never falls through to the proxy
+        // catch-all (which would forward to upstream and can trigger a
+        // browser download for non-HTML responses).
+        .route(
+            "/",
+            get(|| async move {
+                axum::http::StatusCode::NOT_FOUND
+            }),
+        )
         // OAuth2 auth server
         .route("/oauth2/auth", get(oauth::authorize))
         .route("/oauth2/login", post(oauth::login))
