@@ -211,12 +211,14 @@
     <nav aria-label="breadcrumb" id="doc-breadcrumb" class="mb-3"></nav>
     <div class="mb-3">
       <h4 id="doc-detail-title" class="mb-2"></h4>
-      <div class="btn-group btn-group-sm">
+      <div class="d-flex justify-content-between align-items-center">
         <button class="btn btn-sm btn-outline-secondary" onclick="docBackToList()" title="Back"><i class="bi bi-arrow-left"></i></button>
-        <button class="btn btn-sm btn-outline-success" onclick="docOpenCreate(D.currentSlug)" title="New child"><i class="bi bi-plus-lg"></i></button>
-        <button class="btn btn-sm btn-outline-primary" onclick="docOpenEdit()" title="Edit"><i class="bi bi-pencil"></i></button>
-        <button class="btn btn-sm btn-outline-warning" onclick="docOpenMove()" title="Move"><i class="bi bi-diagram-3"></i></button>
-        <button class="btn btn-sm btn-outline-danger" onclick="docOpenDelete()" title="Delete"><i class="bi bi-trash"></i></button>
+        <div class="btn-group btn-group-sm">
+          <button class="btn btn-sm btn-outline-success" onclick="docOpenCreate(D.currentSlug)" title="New child"><i class="bi bi-plus-lg"></i></button>
+          <button class="btn btn-sm btn-outline-primary" onclick="docOpenEdit()" title="Edit"><i class="bi bi-pencil"></i></button>
+          <button class="btn btn-sm btn-outline-warning" onclick="docOpenMove()" title="Move"><i class="bi bi-diagram-3"></i></button>
+          <button class="btn btn-sm btn-outline-danger" onclick="docOpenDelete()" title="Delete"><i class="bi bi-trash"></i></button>
+        </div>
       </div>
     </div>
     <div class="card mb-3">
@@ -226,8 +228,8 @@
           <span class="badge bg-info text-white me-1" id="doc-detail-version"></span>
           <span class="text-muted small" id="doc-detail-dates"></span>
         </div>
-        <div id="doc-detail-tags" class="mb-2"></div>
         <div id="doc-detail-content" class="doc-markdown"></div>
+        <div id="doc-detail-tags" class="mt-3"></div>
       </div>
     </div>
     <div class="card mb-3" id="doc-memrefs-card" style="display:none;">

@@ -128,7 +128,17 @@ pub async fn dashboard_index(State(state): State<AppState>, headers: HeaderMap) 
     // Check for valid session cookie.
     if let Some(session_id) = extract_session(&headers, &state.config.jwt_secret) {
         if state.store.get_session(&session_id).is_some() {
-            return Html(dashboard_spa()).into_response();
+            // The SPA shell is served fresh from disk on every request (see
+            // dashboard_spa()) specifically so edits take effect without a
+            // rebuild — but without this header the browser is free to
+            // cache the HTML response itself, which then silently serves a
+            // stale JS bundle on normal navigation until a hard refresh.
+            let mut resp = Html(dashboard_spa()).into_response();
+            resp.headers_mut().insert(
+                axum::http::header::CACHE_CONTROL,
+                HeaderValue::from_static("no-store"),
+            );
+            return resp;
         }
     }
     // No valid session → redirect to OAuth2 authorize.
