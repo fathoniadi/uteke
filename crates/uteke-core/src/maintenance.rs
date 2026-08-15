@@ -40,12 +40,16 @@ impl crate::Uteke {
             detail: format!("{} vectors", index_count),
         });
 
-        // 3. Index consistency
-        if db_count == index_count {
+        // 3. Index consistency — compare against embeddable rows only.
+        // Some memories (e.g. doc_stub:true FK placeholders) never get an
+        // embedding by design and would otherwise show as a permanent,
+        // unfixable "mismatch" against the raw total row count.
+        let embeddable_count = self.store.count_embeddable(None)?;
+        if embeddable_count == index_count {
             checks.push(DoctorCheck {
                 name: "Index consistency".to_string(),
                 status: DoctorStatus::Ok,
-                detail: format!("DB={} Index={}", db_count, index_count),
+                detail: format!("DB={} Index={}", embeddable_count, index_count),
             });
         } else {
             checks.push(DoctorCheck {
@@ -53,7 +57,7 @@ impl crate::Uteke {
                 status: DoctorStatus::Error,
                 detail: format!(
                     "MISMATCH: DB={} Index={} — run `uteke repair`",
-                    db_count, index_count
+                    embeddable_count, index_count
                 ),
             });
         }
@@ -92,7 +96,9 @@ impl crate::Uteke {
 
     /// Verify DB and index consistency. Returns mismatch count.
     pub fn verify(&self) -> Result<VerifyReport, Error> {
-        let db_count = self.store.count(None)?;
+        // Embeddable count, not raw total — see count_embeddable() doc
+        // comment (doc_stub:true FK placeholders never get an embedding).
+        let db_count = self.store.count_embeddable(None)?;
         let index = self
             .index
             .read()
@@ -112,7 +118,9 @@ impl crate::Uteke {
         // Fix partially-migrated schema (e.g. missing has_children column, #500).
         self.store.ensure_schema_consistency()?;
 
-        let before_db = self.store.count(None)?;
+        // Embeddable count, not raw total — see count_embeddable() doc
+        // comment (doc_stub:true FK placeholders never get an embedding).
+        let before_db = self.store.count_embeddable(None)?;
         let before_index = {
             let index = self
                 .index

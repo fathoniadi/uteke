@@ -2260,8 +2260,8 @@ async function roomLoadSummaryDoc(id){
           <div class="d-flex align-items-center gap-2 mt-1">
             <span class="text-muted small"><i class="bi bi-person me-1"></i>${esc(e.author||"—")}</span>
             <span class="text-muted small">${esc(fmtDate(e.created_at))}</span>
-            ${(e.tags||[]).length ? `<span>${e.tags.map(t => `<span class="badge bg-light text-dark border me-1">${esc(t)}</span>`).join("")}</span>` : ""}
           </div>
+          ${(e.tags||[]).length ? `<div class="mt-1">${e.tags.map(t => `<span class="badge bg-light text-dark border me-1">${esc(t)}</span>`).join("")}</div>` : ""}
         </div>`;
       });
       html += `</div></div>`;

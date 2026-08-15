@@ -93,6 +93,17 @@ impl EdgeList {
     }
 }
 
+/// A `memory_edges` row whose endpoint no longer resolves to a live row.
+/// Returned by `Store::find_dangling_edges` / `uteke edges --verify-fk`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DanglingEdge {
+    pub source_id: String,
+    pub target_id: String,
+    pub edge_type: String,
+    /// Human-readable reason, e.g. "target document deleted".
+    pub reason: String,
+}
+
 // ── Pattern extraction ─────────────────────────────────────────────────────
 
 /// A raw extracted reference — target may be a slug, tag, or UUID depending on kind.
@@ -503,6 +514,46 @@ impl Store {
             .query_map(params![target_id, edge_type], |r| r.get::<_, String>(0))
             .map_err(|e| Error::db("query edge_sources", e))?;
         Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// Scan the whole `memory_edges` table for rows whose endpoint no
+    /// longer resolves. See `Uteke::verify_edges_fk` for the exact cases
+    /// this catches (mainly: `references_doc` edges left behind after
+    /// `uteke doc delete` removes the target document but not its
+    /// FK-placeholder stub row or the edges pointing at it).
+    pub fn find_dangling_edges(&self) -> Result<Vec<DanglingEdge>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT source_id, target_id, edge_type, reason FROM (
+                     SELECT me.source_id, me.target_id, me.edge_type,
+                            CASE
+                                WHEN NOT EXISTS (SELECT 1 FROM memories m WHERE m.id = me.source_id)
+                                    THEN 'source memory missing'
+                                WHEN me.edge_type = 'references_doc'
+                                     AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.id = me.target_id)
+                                    THEN 'target document deleted'
+                                WHEN me.edge_type != 'references_doc'
+                                     AND NOT EXISTS (SELECT 1 FROM memories m WHERE m.id = me.target_id)
+                                    THEN 'target memory missing'
+                                ELSE NULL
+                            END AS reason
+                     FROM memory_edges me
+                 ) WHERE reason IS NOT NULL",
+            )
+            .map_err(|e| Error::db("prepare find_dangling_edges", e))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(DanglingEdge {
+                    source_id: r.get(0)?,
+                    target_id: r.get(1)?,
+                    edge_type: r.get(2)?,
+                    reason: r.get(3)?,
+                })
+            })
+            .map_err(|e| Error::db("query find_dangling_edges", e))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| Error::db("collect find_dangling_edges", e))
     }
 
     /// Resolve a tag to the most recent memory id carrying that tag.
@@ -919,6 +970,22 @@ impl crate::Uteke {
     /// List edges for a memory (both directions). Public for `uteke edges <id>`.
     pub fn edges_for(&self, memory_id: &str) -> Result<EdgeList, Error> {
         self.store.list_memory_edges(memory_id)
+    }
+
+    /// Store-wide dangling-edge scan. Public for `uteke edges --verify-fk`.
+    ///
+    /// `memory_edges.source_id`/non-doc `target_id` are protected by the
+    /// schema's FK to `memories(id)` with `ON DELETE CASCADE`, so those
+    /// should be structurally impossible — checked anyway, defensively.
+    /// The gap this actually catches: `references_doc` edges whose
+    /// `target_id` is a valid `memories` row (the FK-placeholder stub
+    /// inserted by `upsert_document`, see documents.rs) but whose
+    /// corresponding `documents` row has since been deleted via
+    /// `uteke doc delete` — nothing currently cleans up the stub or the
+    /// edge when that happens, so the edge silently points at a document
+    /// that no longer exists.
+    pub fn verify_edges_fk(&self) -> Result<Vec<DanglingEdge>, Error> {
+        self.store.find_dangling_edges()
     }
 
     /// Total edge count across the store.

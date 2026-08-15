@@ -367,7 +367,17 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
             id,
             deep,
             direction,
-        } => edges::run(cli, uteke, id, *deep, direction),
+            verify_fk,
+        } => {
+            if *verify_fk {
+                edges::run_verify_fk(cli, uteke)
+            } else {
+                let id = id
+                    .as_deref()
+                    .ok_or_else(|| "the following required arguments were not provided: <ID> (or pass --verify-fk to scan the whole store)".to_string())?;
+                edges::run(cli, uteke, id, *deep, direction)
+            }
+        }
 
         Commands::RebuildBacklinks { quiet } => edges::run_rebuild_backlinks(cli, uteke, *quiet),
 

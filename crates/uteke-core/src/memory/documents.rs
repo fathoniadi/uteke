@@ -263,6 +263,37 @@ impl super::Store {
             doc.id.clone()
         };
 
+        // Insert a stub row in `memories` with id = doc_id, so that
+        // memory_edges.target_id's FK to memories(id) is satisfied when
+        // wire_edges() auto-wires a `references_doc` edge (memory ->
+        // this document) for a `[[slug]]` reference in some other
+        // memory's content (see edges.rs). Without this, that edge
+        // insert violates the FK and is silently dropped.
+        //
+        // Deliberately NOT a schema change: memory_edges.target_id keeps
+        // its existing FK to memories(id) untouched. Trade-off: this repo's
+        // list()/search_content() do not filter `deprecated` by default, so
+        // this stub CAN surface in `uteke_list`/`uteke_search` output (tag
+        // `doc_stub:true` marks it for anyone filtering/cleaning it up).
+        // Empty content avoids matching most keyword searches, and it is
+        // never embedded (embedding stays NULL), so it's excluded from
+        // load_all()'s vector-index build and never surfaces via semantic
+        // recall. `INSERT OR IGNORE` makes this idempotent on document
+        // re-sync and safe to backfill for documents created before this
+        // fix shipped.
+        tx.execute(
+            "INSERT OR IGNORE INTO memories \
+             (id, content, created_at, updated_at, deprecated, deprecate_reason, memory_type) \
+             VALUES (?1, '', ?2, ?2, 1, 'doc-edge-target stub (auto-created, do not edit)', 'reference')",
+            params![doc_id, doc.updated_at],
+        )
+        .map_err(|e| Error::db("insert document edge-target stub memory", e))?;
+        tx.execute(
+            "INSERT OR IGNORE INTO memory_tags (memory_id, tag) VALUES (?1, 'doc_stub:true')",
+            params![doc_id],
+        )
+        .map_err(|e| Error::db("tag document edge-target stub memory", e))?;
+
         tx.commit()
             .map_err(|e| Error::db("commit document upsert", e))?;
 

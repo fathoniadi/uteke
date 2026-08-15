@@ -466,7 +466,11 @@ impl super::Store {
                     memories.push(row.map_err(|e| Error::db("database operation", e))?);
                 }
             }
-            // Namespace specified, no tag
+            // Namespace specified, no tag. Excludes deprecated rows (e.g. the
+            // doc_stub:true FK-placeholder memories auto-created by
+            // upsert_document) — an unfiltered browse should not surface
+            // internal bookkeeping rows. Filter explicitly by tag (the
+            // (Some, Some) / (None, Some) branches below) to see them.
             (Some(ns), None) => {
                 let mut stmt = self
                     .conn
@@ -475,7 +479,7 @@ impl super::Store {
                          created_at, updated_at, namespace, access_count, \
                          last_accessed, deprecated, valid_from, valid_until, \
                          memory_type, importance, pinned, content_type, slug \
-                         FROM memories WHERE namespace = ?1 \
+                         FROM memories WHERE namespace = ?1 AND deprecated = 0 \
                          ORDER BY created_at DESC LIMIT ?2 OFFSET ?3",
                     )
                     .map_err(|e| Error::db("database operation", e))?;
@@ -507,7 +511,8 @@ impl super::Store {
                     memories.push(row.map_err(|e| Error::db("database operation", e))?);
                 }
             }
-            // No namespace, no tag — all memories across all namespaces (#526)
+            // No namespace, no tag — all memories across all namespaces (#526).
+            // Excludes deprecated (see comment on the (Some, None) branch above).
             (None, None) => {
                 let mut stmt = self
                     .conn
@@ -516,7 +521,7 @@ impl super::Store {
                          created_at, updated_at, namespace, access_count, \
                          last_accessed, deprecated, valid_from, valid_until, \
                          memory_type, importance, pinned, content_type, slug \
-                         FROM memories \
+                         FROM memories WHERE deprecated = 0 \
                          ORDER BY created_at DESC LIMIT ?1 OFFSET ?2",
                     )
                     .map_err(|e| Error::db("database operation", e))?;
@@ -550,7 +555,7 @@ impl super::Store {
             .conn
             .prepare(
                 "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug
-                 FROM memories WHERE namespace = ?1 AND content LIKE ?2 ESCAPE '!'
+                 FROM memories WHERE namespace = ?1 AND deprecated = 0 AND content LIKE ?2 ESCAPE '!'
                  ORDER BY created_at DESC LIMIT ?3",
             )
             .map_err(|e| Error::db("database operation", e))?;
@@ -613,6 +618,38 @@ impl super::Store {
     }
 
     /// Count total memories, optionally filtered by namespace.
+    /// Count memories that are expected to have a vector-index entry.
+    ///
+    /// Mirrors the `WHERE embedding IS NOT NULL` filter in `load_all()`
+    /// (the source of truth for what gets indexed). Some memories are
+    /// intentionally never embedded — e.g. the `doc_stub:true` placeholder
+    /// rows auto-inserted by `upsert_document()` solely to satisfy
+    /// `memory_edges.target_id`'s FK to `memories(id)` for `references_doc`
+    /// edges (see documents.rs). Comparing the *total* row count against
+    /// the index count would flag those as a permanent, unfixable
+    /// "inconsistency"; comparing against this embeddable count does not.
+    pub fn count_embeddable(&self, namespace: Option<&str>) -> Result<usize, Error> {
+        let count: usize = match namespace {
+            Some(ns) => self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM memories WHERE namespace = ?1 AND embedding IS NOT NULL",
+                    params![ns],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|e| Error::db("database operation", e))? as usize,
+            None => self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM memories WHERE embedding IS NOT NULL",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|e| Error::db("database operation", e))? as usize,
+        };
+        Ok(count)
+    }
+
     pub fn count(&self, namespace: Option<&str>) -> Result<usize, Error> {
         let count: usize = match namespace {
             Some(ns) => self

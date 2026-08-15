@@ -398,10 +398,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: GraphCommands,
     },
-    /// List auto-wired edges for a memory (v8, #346)
+    /// List auto-wired edges for a memory (v8, #346), or scan the whole
+    /// store for dangling edges with `--verify-fk`.
     Edges {
-        /// Memory ID (UUID)
-        id: String,
+        /// Memory ID (UUID). Required unless --verify-fk is set.
+        id: Option<String>,
         /// Multi-hop traversal depth. 0 (default) = list direct edges only.
         /// N>0 performs BFS across the edge table and returns reachable memory ids.
         #[arg(long, default_value = "0")]
@@ -411,6 +412,11 @@ pub enum Commands {
         /// `incoming` is useful for viewing backlinks (#350).
         #[arg(long, default_value = "both")]
         direction: String,
+        /// Scan the entire store for edges pointing at a deleted/missing
+        /// target instead of listing edges for a single memory. Ignores
+        /// `id`/`deep`/`direction` when set.
+        #[arg(long)]
+        verify_fk: bool,
     },
     /// Rebuild `referenced_by` backlinks from existing forward edges (#350)
     RebuildBacklinks {
