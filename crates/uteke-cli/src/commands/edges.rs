@@ -167,3 +167,32 @@ pub(crate) fn run_rebuild_backlinks(cli: &Cli, uteke: &Uteke, quiet: bool) -> Re
     }
     Ok(())
 }
+
+/// Run `uteke edges --verify-fk` — store-wide dangling-edge scan.
+pub(crate) fn run_verify_fk(cli: &Cli, uteke: &Uteke) -> Result<(), String> {
+    let dangling = uteke
+        .verify_edges_fk()
+        .map_err(|e| format!("Failed to verify edges: {e}"))?;
+
+    if cli.json {
+        println!("{}", serde_json::to_string(&dangling).unwrap());
+        return Ok(());
+    }
+
+    if dangling.is_empty() {
+        println!("No dangling edges found — all memory_edges targets resolve.");
+        return Ok(());
+    }
+
+    println!("Found {} dangling edge(s):\n", dangling.len());
+    for d in &dangling {
+        println!(
+            "  {} → {}   [{}]   ⚠ {}",
+            &d.source_id[..8.min(d.source_id.len())],
+            &d.target_id[..8.min(d.target_id.len())],
+            d.edge_type,
+            d.reason
+        );
+    }
+    Ok(())
+}

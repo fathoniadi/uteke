@@ -94,6 +94,139 @@ impl crate::Uteke {
         Ok(DoctorReport { checks })
     }
 
+    /// `uteke doctor --deep` (#8): everything `doctor()` checks, plus
+    /// semantic-hygiene checks that used to require manual Python+grep
+    /// auditing (see the 2026-08-15 governance audit that found 16
+    /// duplicate-active shadow pairs by hand). Slower — full table scans —
+    /// so kept opt-in rather than folded into the default `doctor()`.
+    pub fn doctor_deep(&self) -> Result<DoctorReport, Error> {
+        let mut report = self.doctor()?;
+
+        // A. Duplicate active records per key: — same key:<x> tag,
+        // multiple rows also tagged lifecycle:active. Exactly the bug
+        // class from the 2026-08-15 audit (old shadow never deprecated
+        // after being superseded).
+        let dup_active_keys: Vec<(String, i64)> = {
+            let mut stmt = self.store.conn.prepare(
+                "SELECT t.tag, COUNT(*) as n
+                 FROM memory_tags t
+                 JOIN memory_tags active ON active.memory_id = t.memory_id
+                     AND active.tag = 'lifecycle:active'
+                 WHERE t.tag LIKE 'key:%'
+                 GROUP BY t.tag
+                 HAVING COUNT(*) > 1
+                 ORDER BY n DESC",
+            ).map_err(|e| Error::db("prepare dup-active-key check", e))?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                .map_err(|e| Error::db("query dup-active-key check", e))?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+        report.checks.push(if dup_active_keys.is_empty() {
+            DoctorCheck {
+                name: "Duplicate active records".to_string(),
+                status: DoctorStatus::Ok,
+                detail: "No key with more than one lifecycle:active record".to_string(),
+            }
+        } else {
+            DoctorCheck {
+                name: "Duplicate active records".to_string(),
+                status: DoctorStatus::Error,
+                detail: format!(
+                    "{} key(s) have >1 lifecycle:active record: {}",
+                    dup_active_keys.len(),
+                    dup_active_keys
+                        .iter()
+                        .take(10)
+                        .map(|(k, n)| format!("{k} ({n}x)"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }
+        });
+
+        // B. Dangling doc: tags — shadow points at a slug with no matching
+        // document row (deleted document, typo, or pre-sync-order write).
+        let dangling_doc_tags: Vec<String> = {
+            let mut stmt = self.store.conn.prepare(
+                "SELECT t.tag FROM memory_tags t
+                 WHERE t.tag LIKE 'doc:%'
+                 AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.slug = substr(t.tag, 5))",
+            ).map_err(|e| Error::db("prepare dangling-doc-tag check", e))?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(|e| Error::db("query dangling-doc-tag check", e))?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+        report.checks.push(if dangling_doc_tags.is_empty() {
+            DoctorCheck {
+                name: "Dangling doc: tags".to_string(),
+                status: DoctorStatus::Ok,
+                detail: "Every doc:<slug> tag resolves to a live document".to_string(),
+            }
+        } else {
+            DoctorCheck {
+                name: "Dangling doc: tags".to_string(),
+                status: DoctorStatus::Error,
+                detail: format!(
+                    "{} shadow(s) reference a missing document: {}",
+                    dangling_doc_tags.len(),
+                    dangling_doc_tags
+                        .iter()
+                        .take(10)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }
+        });
+
+        // C. Duplicate authoritative:true per key — only one record per
+        // key should win by default; two authoritative:true records for
+        // the same key means callers can't tell which is meant to be
+        // trusted (also found in the 2026-08-15 audit, alongside A above).
+        let dup_authoritative_keys: Vec<(String, i64)> = {
+            let mut stmt = self.store.conn.prepare(
+                "SELECT t.tag, COUNT(*) as n
+                 FROM memory_tags t
+                 JOIN memory_tags auth ON auth.memory_id = t.memory_id
+                     AND auth.tag = 'authoritative:true'
+                 WHERE t.tag LIKE 'key:%'
+                 GROUP BY t.tag
+                 HAVING COUNT(*) > 1
+                 ORDER BY n DESC",
+            ).map_err(|e| Error::db("prepare dup-authoritative check", e))?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                .map_err(|e| Error::db("query dup-authoritative check", e))?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+        report.checks.push(if dup_authoritative_keys.is_empty() {
+            DoctorCheck {
+                name: "Duplicate authoritative records".to_string(),
+                status: DoctorStatus::Ok,
+                detail: "No key with more than one authoritative:true record".to_string(),
+            }
+        } else {
+            DoctorCheck {
+                name: "Duplicate authoritative records".to_string(),
+                status: DoctorStatus::Error,
+                detail: format!(
+                    "{} key(s) have >1 authoritative:true record: {}",
+                    dup_authoritative_keys.len(),
+                    dup_authoritative_keys
+                        .iter()
+                        .take(10)
+                        .map(|(k, n)| format!("{k} ({n}x)"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }
+        });
+
+        Ok(report)
+    }
+
     /// Verify DB and index consistency. Returns mismatch count.
     pub fn verify(&self) -> Result<VerifyReport, Error> {
         // Embeddable count, not raw total — see count_embeddable() doc
@@ -152,6 +285,57 @@ impl crate::Uteke {
             db_count: before_db,
             index_before: before_index,
             index_after: items.len(),
+        })
+    }
+
+    /// Incremental repair (#10): only add ids that are missing from the
+    /// index, instead of `repair()`'s full `index.build()` rebuild from
+    /// every embeddable row in SQLite. `repair()` (full rebuild) is O(n)
+    /// in total store size on every call regardless of how much actually
+    /// changed since the last repair — fine at ~142 memories, but a real
+    /// cost once the store grows into the thousands. This path is O(k)
+    /// in the number of missing entries.
+    ///
+    /// Not a replacement for `repair()`: if the index is actually corrupt
+    /// (not just missing some entries — e.g. the "discarding corrupt
+    /// index" case logged when two processes raced on the file lock),
+    /// only a full rebuild fixes it. Use this for routine maintenance;
+    /// fall back to `repair()` when `uteke doctor` still reports a
+    /// mismatch after running this.
+    pub fn repair_incremental(&self) -> Result<RepairReport, Error> {
+        self.store.ensure_schema_consistency()?;
+
+        let before_db = self.store.count_embeddable(None)?;
+        let all_memories = self.store.load_all(None)?;
+
+        let mut index = self
+            .index
+            .write()
+            .map_err(|_| Error::lock("index write lock during incremental repair"))?;
+        let before_index = index.len();
+
+        let mut added = 0usize;
+        for m in &all_memories {
+            if m.embedding.is_empty() || index.contains(&m.id) {
+                continue;
+            }
+            if let Err(e) = index.insert(&m.id, &m.embedding) {
+                tracing::warn!("Incremental repair: failed to insert {}: {e}", m.id);
+                continue;
+            }
+            added += 1;
+        }
+
+        if added > 0 {
+            if let Err(e) = index.save() {
+                tracing::warn!("Failed to save index after incremental repair: {e}");
+            }
+        }
+
+        Ok(RepairReport {
+            db_count: before_db,
+            index_before: before_index,
+            index_after: before_index + added,
         })
     }
 

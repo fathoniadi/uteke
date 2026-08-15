@@ -878,6 +878,24 @@ impl crate::Uteke {
                 tracing::warn!("Auto-wire edges failed for {source_id}: {e}");
             }
         }
+
+        // Auto-deprecate on supersede (#5, prevents the "16 duplicate active
+        // shadows" class of bug found 2026-08-15: an old record superseded
+        // by a new one but never marked deprecated, so both stayed
+        // lifecycle:active and recall couldn't tell which one to trust).
+        // Best-effort — same failure posture as the edge wiring above; a
+        // missed auto-deprecate is a data-hygiene nit, not a correctness
+        // failure worth breaking the calling remember()/update() over.
+        for (target_id, edge_type) in &resolved {
+            if edge_type == EDGE_SUPERSEDES {
+                let reason = format!("auto-deprecated: superseded by {source_id}");
+                if let Err(e) = self.store.deprecate_with_reason(target_id, &reason) {
+                    tracing::warn!(
+                        "Auto-deprecate failed for {target_id} (superseded by {source_id}): {e}"
+                    );
+                }
+            }
+        }
     }
 
     /// Cosine-similarity auto-linking (#401).

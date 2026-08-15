@@ -172,13 +172,15 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
             Ok(())
         }
 
-        Commands::Doctor => maintenance::run_doctor(cli, uteke),
+        Commands::Doctor { deep } => maintenance::run_doctor(cli, uteke, *deep),
 
         Commands::Verify => maintenance::run_verify(cli, uteke),
 
-        Commands::Repair { rebuild, reembed } => {
-            maintenance::run_repair(cli, uteke, *rebuild, *reembed, config)
-        }
+        Commands::Repair {
+            rebuild,
+            reembed,
+            incremental,
+        } => maintenance::run_repair(cli, uteke, *rebuild, *reembed, *incremental, config),
 
         Commands::Tags { command } => tags::run(cli, uteke, ns, command),
 

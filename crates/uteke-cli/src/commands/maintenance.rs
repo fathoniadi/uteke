@@ -7,9 +7,15 @@ use crate::output;
 use uteke_core::Uteke;
 use uteke_core::extraction::ExtractedFact;
 
-pub(crate) fn run_doctor(cli: &Cli, uteke: &Uteke) -> Result<(), String> {
-    tracing::info!("Running doctor");
-    let report = uteke.doctor().map_err(|e| format!("Doctor failed: {e}"))?;
+pub(crate) fn run_doctor(cli: &Cli, uteke: &Uteke, deep: bool) -> Result<(), String> {
+    tracing::info!("Running doctor{}", if deep { " --deep" } else { "" });
+    let report = if deep {
+        uteke
+            .doctor_deep()
+            .map_err(|e| format!("Doctor --deep failed: {e}"))?
+    } else {
+        uteke.doctor().map_err(|e| format!("Doctor failed: {e}"))?
+    };
     if cli.json {
         output::print_json(&report);
     } else {
@@ -34,6 +40,7 @@ pub(crate) fn run_repair(
     uteke: &Uteke,
     rebuild: bool,
     reembed: bool,
+    incremental: bool,
     config: &crate::Config,
 ) -> Result<(), String> {
     if rebuild {
@@ -64,7 +71,17 @@ pub(crate) fn run_repair(
         tracing::info!("Running repair");
     }
 
-    let report = uteke.repair().map_err(|e| format!("Repair failed: {e}"))?;
+    // --rebuild deletes the on-disk index above, so there's nothing to
+    // add incrementally to — always full-rebuild in that case regardless
+    // of --incremental.
+    let report = if incremental && !rebuild {
+        tracing::info!("Running repair --incremental (adding missing entries only)");
+        uteke
+            .repair_incremental()
+            .map_err(|e| format!("Incremental repair failed: {e}"))?
+    } else {
+        uteke.repair().map_err(|e| format!("Repair failed: {e}"))?
+    };
     if cli.json {
         output::print_json(&report);
     } else {

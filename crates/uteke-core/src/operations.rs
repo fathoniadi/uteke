@@ -303,14 +303,22 @@ impl crate::Uteke {
             source_type: "user".to_string(),
         };
 
-        // Acquire index write lock BEFORE any writes so lock failures are detected early.
-        // If SQLite commit fails after index insert, the orphan index entry is harmless
-        // and will be cleaned up by verify/repair.
-        let mut index = self
-            .index
-            .write()
-            .map_err(|_| Error::lock("index write lock during remember"))?;
-
+        // Lock granularity (#9, 2026-08-15): the index write lock used to be
+        // acquired here, BEFORE the SQLite insert + wire_edges below, and
+        // held for the whole sequence — serializing every concurrent
+        // remember() call against SQLite writes and edge resolution that
+        // don't actually touch the vector index. Now the lock is only
+        // acquired right before `index.insert()`, shrinking the exclusive
+        // section to the part that genuinely needs it.
+        //
+        // Failure-mode note (unchanged in spirit from the prior comment):
+        // if the process dies between `store.insert()` succeeding and the
+        // index lock being acquired below, SQLite has the memory but the
+        // index doesn't yet — recoverable via `uteke repair`, exactly the
+        // same recovery path already relied on a few lines down when
+        // `index.save()` itself fails after 3 retries. This reordering
+        // doesn't introduce a new class of inconsistency, just widens an
+        // already-accepted, already-repairable window.
         self.store.insert(&memory)?;
 
         // Timeline: record creation (#347). This hook lives in the single
@@ -332,6 +340,10 @@ impl crate::Uteke {
         // Invalidate recall cache — new memory may affect future queries
         self.recall_cache.invalidate_namespace(&memory.namespace);
 
+        let mut index = self
+            .index
+            .write()
+            .map_err(|_| Error::lock("index write lock during remember"))?;
         index.insert(&id, embedding)?;
         // Retry index persistence up to 3 times (#621).
         // A failed save means the in-memory index has the entry but
@@ -907,7 +919,27 @@ impl crate::Uteke {
         tags_filter: Option<&[&str]>,
         namespace: Option<&str>,
     ) -> Result<Vec<SearchResult>, Error> {
-        let memories = self.store.search_content(query, namespace, limit)?;
+        let mut memories = self.store.search_content(query, namespace, limit)?;
+
+        // Fallback to real FTS5 token (OR-joined, per-word) matching when
+        // the plain-LIKE search above finds nothing (#7). LIKE requires the
+        // ENTIRE query as one contiguous substring, so a multi-word
+        // paraphrased query ("uteke memory read rules" vs content phrased
+        // "rules for reading uteke memory") can miss a record that a
+        // per-word FTS5 match would find. Only engaged on a zero-result
+        // LIKE search so exact-substring callers (IDs, code symbols) keep
+        // their existing precise behavior unchanged.
+        if memories.is_empty() {
+            match self.store.search_fts5_tokens(query, namespace, limit) {
+                Ok(fts_hits) if !fts_hits.is_empty() => {
+                    memories = fts_hits.into_iter().map(|(m, _rank)| m).collect();
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::debug!("FTS5 token fallback failed for '{query}': {e}");
+                }
+            }
+        }
 
         let results: Vec<SearchResult> = memories
             .into_iter()

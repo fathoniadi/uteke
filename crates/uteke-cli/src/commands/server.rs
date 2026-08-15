@@ -278,6 +278,27 @@ pub(crate) fn run_via_server(cli: &Cli, server_url: &str) -> Result<(), String> 
                 return Err("Provide an ID, --tag, --cold, or --all".into());
             }
         }
+        Commands::Doctor { deep } => {
+            // Routed via HTTP when a server is running so the CLI never
+            // opens the local usearch index file lock while uteke-serve
+            // also holds it (#11 — the exact contention seen 2026-08-15:
+            // "Could not acquire lock ... after 30s").
+            let url = if *deep {
+                format!("{server_url}/doctor?deep=true")
+            } else {
+                format!("{server_url}/doctor")
+            };
+            let resp = client
+                .get(url)
+                .send()
+                .map_err(|e| format!("Server error: {e}"))?;
+            let report = parse_response::<uteke_core::DoctorReport>(resp)?;
+            if cli.json {
+                output::print_json(&report);
+            } else {
+                output::print_doctor_human(&report);
+            }
+        }
         // Commands not supported via server fall through to local
         _ => {
             return Err("unsupported".into());

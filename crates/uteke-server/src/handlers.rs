@@ -339,10 +339,16 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                     )
                 };
 
-                // Unified search path (#531): when search_type is specified,
-                // use recall_unified. Entity/category filters are passed
-                // through to the core recall candidate loop (#663).
-                let unified_result = if req_data.search_type.is_some() && point_in_time.is_none() {
+                // Unified search path (#531): used whenever search_type
+                // and/or strategy is specified, so `strategy` alone (with
+                // search_type omitted) isn't silently dropped in favor of
+                // the legacy vector-only `recall_result` above (#1034).
+                // Entity/category filters are passed through to the core
+                // recall candidate loop (#663).
+                let unified_result = if (req_data.search_type.is_some()
+                    || req_data.strategy.is_some())
+                    && point_in_time.is_none()
+                {
                     let search_type = match req_data.search_type.as_deref() {
                         Some("memory") => uteke_core::SearchType::Memory,
                         Some("doc") => uteke_core::SearchType::Document,
@@ -357,12 +363,15 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
                             );
                         }
                     };
-                    // Parse strategy (#900)
+                    // Parse strategy (#900, #1034). Default is Hybrid — the
+                    // same default the core `RecallStrategy` enum declares
+                    // (vector+FTS5 via RRF) — not Vector-only, so an omitted
+                    // strategy behaves the same here as everywhere else.
                     let strategy = match req_data.strategy.as_deref() {
                         Some("fts5") => uteke_core::RecallStrategy::Fts5,
-                        Some("hybrid") => uteke_core::RecallStrategy::Hybrid,
+                        Some("hybrid") | None => uteke_core::RecallStrategy::Hybrid,
                         Some("graph") => uteke_core::RecallStrategy::Graph,
-                        Some("vector") | None => uteke_core::RecallStrategy::Vector,
+                        Some("vector") => uteke_core::RecallStrategy::Vector,
                         Some(other) => {
                             return ctx.error_response_for(
                                 req,
@@ -584,6 +593,31 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         }
 
         // ── Stats (GET = all or ?namespace=<name>) ───────────────────
+        // Health check via the already-running server, avoiding the file
+        // lock the CLI would otherwise open directly on `uteke_index.usearch`
+        // (#11: this was the exact cause of "Could not acquire lock ...
+        // after 30s" seen 2026-08-15 when `uteke doctor` ran alongside a
+        // live `uteke-serve`). `?deep=true` runs the extra semantic-hygiene
+        // checks from `doctor_deep()` (#8).
+        (Method::Get, "/doctor") => {
+            let query = req.url().split('?').nth(1).unwrap_or("");
+            let deep = query
+                .split('&')
+                .any(|pair| pair == "deep=true" || pair == "deep=1");
+            let result = if deep {
+                uteke.doctor_deep()
+            } else {
+                uteke.doctor()
+            };
+            match result {
+                Ok(report) => ctx.ok_response_for(req, &report),
+                Err(e) => {
+                    error!("Internal error: {e}");
+                    ctx.error_response_for(req, 500, "Internal server error")
+                }
+            }
+        }
+
         (Method::Get, "/stats") => {
             // Parse ?namespace= query parameter for scoped stats (#382).
             let query = req.url().split('?').nth(1).unwrap_or("");

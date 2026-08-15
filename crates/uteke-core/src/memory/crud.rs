@@ -100,6 +100,15 @@ impl super::Store {
         tags_json: &str,
         metadata_json: &str,
     ) -> Result<(), Error> {
+        // Validate memory_type against known taxonomy (#P1-3).
+        // Prevents typos or invalid types from entering the DB silently.
+        if crate::memory::types::MemoryType::from_str_opt(&memory.memory_type).is_none() {
+            return Err(Error::db_msg(format!(
+                "Invalid memory_type '{}': must be one of fact, procedure, preference, decision, context, note, insight, reference, event",
+                memory.memory_type
+            )));
+        }
+
         self.conn
             .execute(
                 "INSERT INTO memories (id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type)

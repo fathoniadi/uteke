@@ -272,7 +272,8 @@ fn tool_recall() -> Value {
                 "namespace": { "type": "string", "description": "Namespace to search (default: 'default')" },
                 "tags": { "type": "array", "items": { "type": "string" }, "description": "Filter by tags (optional)" },
                 "min_score": { "type": "number", "description": "Minimum similarity score 0..1 (default: 0.0)" },
-                "type": { "type": "string", "enum": ["all", "memory", "doc"], "description": "Search type: 'all' (default, unified), 'memory', or 'doc'" }
+                "type": { "type": "string", "enum": ["all", "memory", "doc"], "description": "Search type: 'all' (default, unified), 'memory', or 'doc'" },
+                "strategy": { "type": "string", "enum": ["hybrid", "vector", "fts5", "graph"], "description": "Recall strategy: 'hybrid' (default, vector+FTS5 via RRF), 'vector' (embedding similarity only), 'fts5' (keyword only), or 'graph' (hybrid + graph-signal reranking)" }
             },
             "required": ["query"]
         }
@@ -957,6 +958,17 @@ fn exec_recall(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
         }
     };
 
+    // Parse optional recall strategy (#1035). Invalid values are rejected
+    // rather than silently falling back — a caller that explicitly asked
+    // for e.g. "vector" and got a typo-tolerant silent default would have
+    // no way to know their choice was ignored.
+    let strategy = match args["strategy"].as_str() {
+        Some(s) => uteke_core::RecallStrategy::from_str_opt(s).ok_or_else(|| {
+            format!("Invalid strategy: '{s}'. Use 'hybrid', 'vector', 'fts5', or 'graph'.")
+        })?,
+        None => uteke_core::RecallStrategy::default(), // Hybrid
+    };
+
     // Use unified search when type is specified or default (all).
     // Fall back to legacy recall only for backward compat with existing MCP consumers.
     let results = uteke
@@ -970,7 +982,7 @@ fn exec_recall(uteke: &Uteke, args: &Value) -> Result<ToolResult, String> {
             None,
             None,
             false,
-            uteke_core::RecallStrategy::Vector, // #900: default vector, MCP doesn't expose strategy yet
+            strategy,
         )
         .map_err(|e| format!("Failed: {e}"))?;
 

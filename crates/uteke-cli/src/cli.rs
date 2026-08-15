@@ -214,7 +214,14 @@ pub enum Commands {
     /// Print agent-facing memory tools guide for system prompt injection (#1010)
     Guide,
     /// Check system health (DB, index, model, consistency)
-    Doctor,
+    Doctor {
+        /// Also run slower semantic-hygiene checks: duplicate
+        /// lifecycle:active records per key, dangling doc: tags (shadow
+        /// points at a deleted/missing document), and duplicate
+        /// authoritative:true records per key (#8).
+        #[arg(long)]
+        deep: bool,
+    },
     /// Verify DB and index consistency
     Verify,
     /// Verify binary integrity against SHA256 checksums
@@ -239,6 +246,12 @@ pub enum Commands {
         /// Makes previously invisible memories searchable via semantic recall.
         #[arg(long)]
         reembed: bool,
+
+        /// Only add index entries that are missing, instead of rebuilding
+        /// the whole index (#10). Cheaper for routine maintenance on a
+        /// large store; ignored if combined with --rebuild.
+        #[arg(long)]
+        incremental: bool,
     },
     /// Export all memories to JSONL file (no embeddings — portable)
     Export {

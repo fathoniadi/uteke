@@ -3,6 +3,15 @@
 use crate::error::Error;
 use crate::memory::types::{ContradictionResult, DEFAULT_NAMESPACE};
 
+/// Extract the value of a `room:<id>` tag, if present. Used by
+/// `find_duplicates`'s room-aware exclusion — see the comment at its call
+/// site for why same-room pairs need a stricter similarity bar.
+fn room_tag(tags: &[String]) -> Option<&str> {
+    tags.iter()
+        .find_map(|t| t.strip_prefix("room:"))
+        .filter(|s| !s.is_empty())
+}
+
 impl crate::Uteke {
     /// Check for contradictions when storing a new memory.
     ///
@@ -201,14 +210,34 @@ impl crate::Uteke {
                     continue;
                 }
 
-                // Fetch candidate content for preview
-                let content_b = self
-                    .store
-                    .get_by_id(candidate_id)
-                    .ok()
-                    .flatten()
+                // Fetch full candidate (content preview + tags for the
+                // room-aware exclusion below).
+                let candidate_memory = self.store.get_by_id(candidate_id).ok().flatten();
+                let content_b = candidate_memory
+                    .as_ref()
                     .map(|m| m.content.chars().take(80).collect())
                     .unwrap_or_default();
+
+                // Room-aware exclusion (#6, 2026-08-15): two records tagged
+                // with the SAME room:<id> are members of one deliberately
+                // structured package (e.g. the codemap-generator-skill room
+                // held iOS/Android template pairs like flow-ios/flow-android
+                // at sim=0.90-0.93 — structurally near-identical but
+                // intentionally distinct parts, not accidental duplicates).
+                // Only surface same-room pairs as duplicate candidates when
+                // similarity is near-identical (>= 0.98); a real accidental
+                // duplicate of the same content would score there, while a
+                // deliberately-similar sibling part would not.
+                const SAME_ROOM_MIN_SIM: f32 = 0.98;
+                if let Some(cand) = &candidate_memory {
+                    if sim < SAME_ROOM_MIN_SIM {
+                        let room_a = room_tag(&memory.tags);
+                        let room_b = room_tag(&cand.tags);
+                        if room_a.is_some() && room_a == room_b {
+                            continue;
+                        }
+                    }
+                }
 
                 seen.insert(pair_key);
                 pairs.push(crate::memory::types::SimilarPair {

@@ -398,6 +398,13 @@ impl VectorIndex {
         self.index.size()
     }
 
+    /// Whether a memory id already has an entry in this index. Used by
+    /// incremental repair (#10) to add only the ids that are missing
+    /// instead of rebuilding the whole index from scratch.
+    pub fn contains(&self, id: &str) -> bool {
+        self.id_to_key.contains_key(id)
+    }
+
     /// Embedding dimensionality of this index.
     ///
     /// Used by backend dispatch to detect dim mismatch when the user swaps
