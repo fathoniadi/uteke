@@ -278,6 +278,22 @@ pub(crate) fn run_via_server(cli: &Cli, server_url: &str) -> Result<(), String> 
                 return Err("Provide an ID, --tag, --cold, or --all".into());
             }
         }
+        Commands::Edges {
+            verify_fk: true, ..
+        } => {
+            // Same reasoning as Doctor below: route the whole-store
+            // dangling-edge scan through the server so the CLI doesn't
+            // open the local usearch file lock while uteke-serve holds it.
+            // Single-memory `edges <id>` lookups still fall through to the
+            // local store (unhandled here) — smaller/cheaper, less prone
+            // to the same contention.
+            let resp = client
+                .get(format!("{server_url}/edges?verify_fk=true"))
+                .send()
+                .map_err(|e| format!("Server error: {e}"))?;
+            let dangling = parse_response::<Vec<uteke_core::DanglingEdge>>(resp)?;
+            crate::commands::edges::print_dangling_edges(cli, &dangling);
+        }
         Commands::Doctor { deep } => {
             // Routed via HTTP when a server is running so the CLI never
             // opens the local usearch index file lock while uteke-serve

@@ -1931,9 +1931,32 @@ pub fn route(uteke: &Mutex<Uteke>, ctx: &ReqCtx, req: &mut Request) -> Response<
         // ── Edges ────────────────────────────────────────────────────────
         (Method::Get, "/edges") => {
             let query = path.split('?').nth(1).unwrap_or("");
+            // ?verify_fk=true scans the whole store for dangling edges
+            // (`uteke edges --verify-fk`) instead of listing edges for one
+            // memory — routed through here for the same reason /doctor is
+            // (avoids the CLI opening the local usearch file lock while
+            // uteke-serve holds it).
+            let verify_fk = query
+                .split('&')
+                .any(|pair| pair == "verify_fk=true" || pair == "verify_fk=1");
+            if verify_fk {
+                return match uteke.verify_edges_fk() {
+                    Ok(dangling) => ctx.ok_response_for(req, &dangling),
+                    Err(e) => {
+                        error!("Edges verify-fk error: {e}");
+                        ctx.error_response_for(req, 500, "Internal server error")
+                    }
+                };
+            }
             let id = match parse_query_param(query, "id") {
                 Some(id) => id,
-                None => return ctx.error_response_for(req, 400, "Missing 'id' query parameter"),
+                None => {
+                    return ctx.error_response_for(
+                        req,
+                        400,
+                        "Missing 'id' query parameter (or pass verify_fk=true)",
+                    );
+                }
             };
             match uteke.edges_for(&id) {
                 Ok(edges) => ctx.ok_response_for(req, &edges),

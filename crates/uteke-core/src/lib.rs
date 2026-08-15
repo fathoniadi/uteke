@@ -39,8 +39,8 @@ pub use chunker::{
 };
 pub use dream::{DreamPhase, DreamReport, PhaseResult, PhaseStatus};
 pub use edges::{
-    EDGE_REFERENCED_BY, EDGE_REFERENCES, EDGE_REFERENCES_DOC, EDGE_REPLIES_TO, EDGE_SUPERSEDES,
-    EDGE_TAGGED_AS, EdgeList, MemoryEdge, backlink_type_for,
+    DanglingEdge, EDGE_REFERENCED_BY, EDGE_REFERENCES, EDGE_REFERENCES_DOC, EDGE_REPLIES_TO,
+    EDGE_SUPERSEDES, EDGE_TAGGED_AS, EdgeList, MemoryEdge, backlink_type_for,
 };
 pub use graph::{GraphEdge, GraphNode, GraphPath, GraphStats, GraphStore, GraphTriple};
 pub use graph::{Relationship, VALID_REL_TYPES, build_meta_relationship, is_relationship_meta};

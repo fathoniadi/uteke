@@ -173,19 +173,25 @@ pub(crate) fn run_verify_fk(cli: &Cli, uteke: &Uteke) -> Result<(), String> {
     let dangling = uteke
         .verify_edges_fk()
         .map_err(|e| format!("Failed to verify edges: {e}"))?;
+    print_dangling_edges(cli, &dangling);
+    Ok(())
+}
 
+/// Shared with `commands::server::run_via_server`'s HTTP-routed
+/// `?verify_fk=true` path so both give identical output.
+pub(crate) fn print_dangling_edges(cli: &Cli, dangling: &[uteke_core::DanglingEdge]) {
     if cli.json {
-        println!("{}", serde_json::to_string(&dangling).unwrap());
-        return Ok(());
+        println!("{}", serde_json::to_string(dangling).unwrap());
+        return;
     }
 
     if dangling.is_empty() {
         println!("No dangling edges found — all memory_edges targets resolve.");
-        return Ok(());
+        return;
     }
 
     println!("Found {} dangling edge(s):\n", dangling.len());
-    for d in &dangling {
+    for d in dangling {
         println!(
             "  {} → {}   [{}]   ⚠ {}",
             &d.source_id[..8.min(d.source_id.len())],
@@ -194,5 +200,4 @@ pub(crate) fn run_verify_fk(cli: &Cli, uteke: &Uteke) -> Result<(), String> {
             d.reason
         );
     }
-    Ok(())
 }
