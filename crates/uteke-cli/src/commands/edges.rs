@@ -169,29 +169,10 @@ pub(crate) fn run_rebuild_backlinks(cli: &Cli, uteke: &Uteke, quiet: bool) -> Re
 }
 
 /// Run `uteke edges --verify-fk` — store-wide dangling-edge scan.
-/// Routes via HTTP when uteke-serve is running (same pattern as `doctor`),
-/// falling back to direct DB access if the server isn't available.
+/// HTTP routing when uteke-serve is running is handled centrally in
+/// `commands::server::run_via_server`; this is the local-DB fallback
+/// used when no server is available.
 pub(crate) fn run_verify_fk(cli: &Cli, uteke: &Uteke) -> Result<(), String> {
-    // Try routing via server first (same pattern as `doctor` in #11)
-    let server_url = cli.server_url();
-    if let Ok(client) = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-    {
-        if let Ok(resp) = client
-            .get(format!("{server_url}/edges"))
-            .query(&[("verify_fk", "true")])
-            .send()
-        {
-            if resp.status().is_success() {
-                if let Ok(dangling) = resp.json::<Vec<uteke_core::DanglingEdge>>() {
-                    print_dangling_edges(cli, &dangling);
-                    return Ok(());
-                }
-            }
-        }
-    }
-    // Fallback: direct DB access (may cause lock contention with running server)
     let dangling = uteke
         .verify_edges_fk()
         .map_err(|e| format!("Failed to verify edges: {e}"))?;
