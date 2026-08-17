@@ -867,15 +867,7 @@ fn exec_update_memory_tags(uteke: &Uteke, args: &Value) -> Result<ToolResult, St
 
     // Replace the full tag set on the existing memory (no content change).
     let updated = uteke
-        .update_memory(
-            id,
-            None,
-            Some(&tags),
-            None,
-            None,
-            None,
-            None,
-        )
+        .update_memory(id, None, Some(&tags), None, None, None, None)
         .map_err(|e| format!("Failed: {e}"))?;
 
     if !updated {

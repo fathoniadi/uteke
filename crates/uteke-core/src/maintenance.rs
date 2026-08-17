@@ -107,8 +107,11 @@ impl crate::Uteke {
         // class from the 2026-08-15 audit (old shadow never deprecated
         // after being superseded).
         let dup_active_keys: Vec<(String, i64)> = {
-            let mut stmt = self.store.conn.prepare(
-                "SELECT t.tag, COUNT(*) as n
+            let mut stmt = self
+                .store
+                .conn
+                .prepare(
+                    "SELECT t.tag, COUNT(*) as n
                  FROM memory_tags t
                  JOIN memory_tags active ON active.memory_id = t.memory_id
                      AND active.tag = 'lifecycle:active'
@@ -116,7 +119,8 @@ impl crate::Uteke {
                  GROUP BY t.tag
                  HAVING COUNT(*) > 1
                  ORDER BY n DESC",
-            ).map_err(|e| Error::db("prepare dup-active-key check", e))?;
+                )
+                .map_err(|e| Error::db("prepare dup-active-key check", e))?;
             let rows = stmt
                 .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
                 .map_err(|e| Error::db("query dup-active-key check", e))?;
@@ -148,11 +152,15 @@ impl crate::Uteke {
         // B. Dangling doc: tags — shadow points at a slug with no matching
         // document row (deleted document, typo, or pre-sync-order write).
         let dangling_doc_tags: Vec<String> = {
-            let mut stmt = self.store.conn.prepare(
-                "SELECT t.tag FROM memory_tags t
+            let mut stmt = self
+                .store
+                .conn
+                .prepare(
+                    "SELECT t.tag FROM memory_tags t
                  WHERE t.tag LIKE 'doc:%'
                  AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.slug = substr(t.tag, 5))",
-            ).map_err(|e| Error::db("prepare dangling-doc-tag check", e))?;
+                )
+                .map_err(|e| Error::db("prepare dangling-doc-tag check", e))?;
             let rows = stmt
                 .query_map([], |r| r.get::<_, String>(0))
                 .map_err(|e| Error::db("query dangling-doc-tag check", e))?;
@@ -186,8 +194,11 @@ impl crate::Uteke {
         // the same key means callers can't tell which is meant to be
         // trusted (also found in the 2026-08-15 audit, alongside A above).
         let dup_authoritative_keys: Vec<(String, i64)> = {
-            let mut stmt = self.store.conn.prepare(
-                "SELECT t.tag, COUNT(*) as n
+            let mut stmt = self
+                .store
+                .conn
+                .prepare(
+                    "SELECT t.tag, COUNT(*) as n
                  FROM memory_tags t
                  JOIN memory_tags auth ON auth.memory_id = t.memory_id
                      AND auth.tag = 'authoritative:true'
@@ -195,7 +206,8 @@ impl crate::Uteke {
                  GROUP BY t.tag
                  HAVING COUNT(*) > 1
                  ORDER BY n DESC",
-            ).map_err(|e| Error::db("prepare dup-authoritative check", e))?;
+                )
+                .map_err(|e| Error::db("prepare dup-authoritative check", e))?;
             let rows = stmt
                 .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
                 .map_err(|e| Error::db("query dup-authoritative check", e))?;

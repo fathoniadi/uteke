@@ -68,7 +68,7 @@ fn install_skill_md(cwd: &std::path::Path) -> Result<std::path::PathBuf, String>
     // Bundled SKILL.md is in .agents/skills/uteke-memory/ relative to repo root.
     // For `cargo install` builds it's embedded; for `cargo run` it lives in the
     // crate's CWD.  We embed the content at compile time to always have it.
-    let bundled = include_str!("../../../.agents/skills/uteke-memory/SKILL.md");
+    let bundled = include_str!("../assets/uteke-memory-skill.md");
     std::fs::write(&dest, bundled).map_err(|e| format!("Failed to write SKILL.md: {e}"))?;
     Ok(dest)
 }
@@ -205,7 +205,7 @@ fn init_cursor(json: bool) -> Result<(), String> {
 /// automatically inject relevant memories into every agent turn — mirroring
 /// the Hermes memory-provider experience. No manual `uteke recall` needed.
 ///
-/// Extension template lives in `extensions/pi-memory-provider/`.
+/// Extension template lives in `assets/pi-memory-provider/`.
 fn init_pi_memory_provider(json: bool) -> Result<(), String> {
     let ext_dir = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -231,9 +231,9 @@ fn init_pi_memory_provider(json: bool) -> Result<(), String> {
     std::fs::create_dir_all(&ext_dir)
         .map_err(|e| format!("Failed to create extension dir: {e}"))?;
 
-    // Templates embedded from extensions/pi-memory-provider/ at build time.
-    let index_ts = include_str!("../../../extensions/pi-memory-provider/index.ts");
-    let package_json = include_str!("../../../extensions/pi-memory-provider/package.json");
+    // Templates embedded from assets/pi-memory-provider/ at build time.
+    let index_ts = include_str!("../assets/pi-memory-provider/index.ts");
+    let package_json = include_str!("../assets/pi-memory-provider/package.json");
 
     std::fs::write(ext_dir.join("index.ts"), index_ts)
         .map_err(|e| format!("Failed to write index.ts: {e}"))?;
@@ -630,7 +630,7 @@ fn init_hermes(json: bool) -> Result<(), String> {
 ///   via the opt-in `import --extract` path,
 /// - it talks to the `uteke` binary directly (no `uteke-serve` daemon).
 ///
-/// Templates live in `extensions/hermes-memory-provider/` and are embedded at
+/// Templates live in `assets/hermes-memory-provider/` and are embedded at
 /// build time so the generated plugin always matches the installed binary.
 fn init_hermes_memory_provider(json: bool) -> Result<(), String> {
     // Install to ~/.hermes/plugins/uteke/ (memory providers are keyed by name).
@@ -651,9 +651,9 @@ fn init_hermes_memory_provider(json: bool) -> Result<(), String> {
     std::fs::create_dir_all(&plugin_dir)
         .map_err(|e| format!("Failed to create plugin dir: {e}"))?;
 
-    // Templates embedded from extensions/hermes-memory-provider/ at build time.
-    let init_py = include_str!("../../../extensions/hermes-memory-provider/__init__.py.tmpl");
-    let plugin_yaml = include_str!("../../../extensions/hermes-memory-provider/plugin.yaml.tmpl");
+    // Templates embedded from assets/hermes-memory-provider/ at build time.
+    let init_py = include_str!("../assets/hermes-memory-provider/__init__.py.tmpl");
+    let plugin_yaml = include_str!("../assets/hermes-memory-provider/plugin.yaml.tmpl");
 
     std::fs::write(plugin_dir.join("__init__.py"), init_py)
         .map_err(|e| format!("Failed to write __init__.py: {e}"))?;
@@ -695,10 +695,8 @@ fn init_hermes_memory_provider(json: bool) -> Result<(), String> {
 mod tests {
     /// The Hermes memory-provider templates are embedded at build time. Guard
     /// against them going missing or losing their entry points.
-    const INIT_PY: &str =
-        include_str!("../../../extensions/hermes-memory-provider/__init__.py.tmpl");
-    const PLUGIN_YAML: &str =
-        include_str!("../../../extensions/hermes-memory-provider/plugin.yaml.tmpl");
+    const INIT_PY: &str = include_str!("../assets/hermes-memory-provider/__init__.py.tmpl");
+    const PLUGIN_YAML: &str = include_str!("../assets/hermes-memory-provider/plugin.yaml.tmpl");
 
     #[test]
     fn memory_provider_template_has_register_entrypoint() {
@@ -722,9 +720,8 @@ mod tests {
     }
 
     // Pi memory-provider template guards (#575).
-    const PI_INDEX_TS: &str = include_str!("../../../extensions/pi-memory-provider/index.ts");
-    const PI_PACKAGE_JSON: &str =
-        include_str!("../../../extensions/pi-memory-provider/package.json");
+    const PI_INDEX_TS: &str = include_str!("../assets/pi-memory-provider/index.ts");
+    const PI_PACKAGE_JSON: &str = include_str!("../assets/pi-memory-provider/package.json");
 
     #[test]
     fn pi_memory_provider_has_before_agent_start_hook() {

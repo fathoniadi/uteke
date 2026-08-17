@@ -29,9 +29,7 @@ pub fn build_app(state: AppState) -> Router {
         // browser download for non-HTML responses).
         .route(
             "/",
-            get(|| async move {
-                axum::http::StatusCode::NOT_FOUND
-            }),
+            get(|| async move { axum::http::StatusCode::NOT_FOUND }),
         )
         // OAuth2 auth server
         .route("/oauth2/auth", get(oauth::authorize))
