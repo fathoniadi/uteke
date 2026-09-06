@@ -20,6 +20,8 @@
 
 - **uteke-web recall is now strategy-correct** — the dashboard's semantic search no longer hardcodes `strategy: "hybrid"`: the field is omitted by default so the upstream default applies (fusion since 0.16.0, or `[recall] default_strategy`), with an optional `strategy` query param passthrough and a strategy picker in the UI (Server default/Fusion/Hybrid/Vector/Fts5/Graph). The memories list now requests `include_meta: true` (#1188) for exact `has_more` (with a bare-array fallback for pre-0.17 upstreams), and `DashboardMemory` carries a `deprecated` flag surfaced as a "superseded" badge in rows and the detail view.
 
+- **uteke-web dashboard exposes the full recall surface** — `GET /dashboard/api/memories` now accepts `search_type` (`memory`/`all`/`doc`), multi-`tags` (comma-separated) plus legacy single `tag`, `entity`, `category`, `min_score`, `strict`, and time-travel/temporal filters (`at`, `after`, `before`). Semantic recall always requests `enrich: true`, so `linked_doc_slugs` are shown inline. `DashboardMemory` now normalizes and exposes `source`, `source_type`, `metadata`, `linked_doc_slugs`, `access_count`, `last_accessed`, and `result_type`; document results from `search_type=all|doc` render as document cards and link to the document detail view. The dashboard HTML gained an "Advanced" filter panel for all new options.
+
 ## [0.17.0] — 2026-09-06
 
 Minor release. Theme: **inspectable, trustworthy memory** — explain recall on

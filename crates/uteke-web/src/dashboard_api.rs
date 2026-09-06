@@ -13,7 +13,9 @@ use axum::response::{IntoResponse, Json, Response};
 use serde::{Deserialize, Serialize};
 
 use uteke_core::DEFAULT_NAMESPACE;
-use uteke_core::memory::types::{Memory, SearchResult, StoreStats, TagInfo, UnifiedSearchResult};
+use uteke_core::memory::types::{
+    Memory, SearchResult, SearchResultType, StoreStats, TagInfo, UnifiedSearchResult,
+};
 use uteke_core::{Document, DocumentSearchResult, DocumentSummary};
 
 use crate::auth_store::Session;
@@ -210,6 +212,28 @@ pub struct DashboardMemory {
     /// Relevance score (only set for semantic/fts modes).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<f32>,
+    /// Source provenance, e.g. "user" or a file path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Source type, e.g. "user", "file", "url".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_type: Option<String>,
+    /// Arbitrary JSON metadata from the upstream memory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+    /// Document slugs referenced by this memory via `[[slug]]` wikilinks.
+    /// Populated when semantic recall uses `enrich: true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linked_doc_slugs: Option<Vec<String>>,
+    /// How many times this memory has been accessed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_count: Option<u32>,
+    /// Last access timestamp (RFC3339).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_accessed: Option<String>,
+    /// Upstream result type: "memory" or "document".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_type: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -229,6 +253,13 @@ impl From<Memory> for DashboardMemory {
             namespace: m.namespace,
             deprecated: m.deprecated,
             score: None,
+            source: m.source,
+            source_type: Some(m.source_type),
+            metadata: Some(m.metadata),
+            linked_doc_slugs: None,
+            access_count: Some(m.access_count),
+            last_accessed: m.last_accessed.map(|t| t.to_rfc3339()),
+            result_type: Some("memory".to_string()),
         }
     }
 }
@@ -244,19 +275,42 @@ impl From<SearchResult> for DashboardMemory {
 
 impl From<UnifiedSearchResult> for DashboardMemory {
     fn from(r: UnifiedSearchResult) -> Self {
+        let is_doc = r.result_type == SearchResultType::Document;
         Self {
-            id: r.memory_id.unwrap_or_default(),
+            id: if is_doc {
+                r.doc_slug.unwrap_or_default()
+            } else {
+                r.memory_id.unwrap_or_default()
+            },
             content: r.content,
             tags: r.tags,
-            memory_type: r.memory_type.unwrap_or_else(|| "note".to_string()),
+            memory_type: if is_doc {
+                "document".to_string()
+            } else {
+                r.memory_type.unwrap_or_else(|| "note".to_string())
+            },
             importance: r.importance.unwrap_or(0.5),
-            pinned: r.pinned.unwrap_or(false),
+            pinned: if is_doc {
+                false
+            } else {
+                r.pinned.unwrap_or(false)
+            },
             created_at: r.created_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
             namespace: r.namespace.unwrap_or_else(|| DEFAULT_NAMESPACE.to_string()),
             // UnifiedSearchResult carries no deprecated flag; the recall
             // path filters superseded memories before they reach this shape.
             deprecated: false,
             score: Some(r.score),
+            source: r.source,
+            source_type: r.source_type,
+            metadata: r.metadata,
+            linked_doc_slugs: r.linked_doc_slugs,
+            access_count: if is_doc { None } else { r.access_count },
+            last_accessed: r.last_accessed.map(|t| t.to_rfc3339()),
+            result_type: Some(match r.result_type {
+                SearchResultType::Memory => "memory".to_string(),
+                SearchResultType::Document => "document".to_string(),
+            }),
         }
     }
 }
@@ -302,14 +356,76 @@ pub struct MemoryQuery {
     /// in uteke.toml). Ignored for list/fts modes.
     #[serde(default)]
     pub strategy: Option<String>,
+    /// Single tag filter (legacy; prefer `tags`).
     #[serde(default)]
     pub tag: Option<String>,
+    /// Comma-separated multi-tag filter, e.g. `tags=project%3Auteke,auth`.
+    /// Combined with `tag` for backward compatibility.
+    #[serde(default)]
+    pub tags: Option<String>,
+    /// Filter by memory metadata `entity`.
+    #[serde(default)]
+    pub entity: Option<String>,
+    /// Filter by memory metadata `category`.
+    #[serde(default)]
+    pub category: Option<String>,
+    /// Minimum similarity score (0.0–1.0). Semantic mode only.
+    #[serde(default)]
+    pub min_score: Option<f32>,
+    /// Use strict threshold semantics (default false).
+    #[serde(default)]
+    pub strict: bool,
+    /// Time-travel: recall memories that existed at this RFC3339 timestamp.
+    #[serde(default)]
+    pub at: Option<String>,
+    /// Temporal filter: only return memories created at or after this timestamp.
+    #[serde(default)]
+    pub after: Option<String>,
+    /// Temporal filter: only return memories created at or before this timestamp.
+    #[serde(default)]
+    pub before: Option<String>,
+    /// Search scope for semantic mode: "memory" | "doc" | "all".
+    #[serde(default)]
+    pub search_type: Option<String>,
     #[serde(default)]
     pub namespace: Option<String>,
     #[serde(default = "default_page_limit")]
     pub limit: usize,
     #[serde(default)]
     pub offset: usize,
+}
+
+impl MemoryQuery {
+    /// Resolve the list of tag filters from `tags` (comma-separated) and `tag`.
+    pub fn tag_list(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(s) = self.tags.as_deref() {
+            for t in s.split(',').map(|s| s.trim().to_string()) {
+                if !t.is_empty() && !out.contains(&t) {
+                    out.push(t);
+                }
+            }
+        }
+        if let Some(t) = self.tag.as_deref() {
+            let t = t.trim().to_string();
+            if !t.is_empty() && !out.contains(&t) {
+                out.push(t);
+            }
+        }
+        out
+    }
+
+    /// Resolve search type with a safe default.
+    pub fn search_type_value(&self) -> String {
+        let s = self.search_type.as_deref().unwrap_or("memory");
+        if s.eq_ignore_ascii_case("doc") || s.eq_ignore_ascii_case("document") {
+            "doc".to_string()
+        } else if s.eq_ignore_ascii_case("all") {
+            "all".to_string()
+        } else {
+            "memory".to_string()
+        }
+    }
 }
 
 fn default_page_limit() -> usize {
@@ -536,7 +652,8 @@ pub async fn handle_list_memories(
 
     match mode.as_str() {
         "semantic" => {
-            // POST /recall {query, limit, search_type:"memory", strategy?, tags?, namespace?}
+            // POST /recall {query, limit, search_type, strategy, tags, namespace,
+            // entity, category, min_score, strict, at, after, before, enrich}
             // `strategy` is omitted unless explicitly requested, so the
             // upstream default applies (fusion since uteke 0.16.0 #1123, or
             // `[recall] default_strategy` from uteke.toml) — keeping the
@@ -545,16 +662,39 @@ pub async fn handle_list_memories(
             let mut body = serde_json::json!({
                 "query": query,
                 "limit": fetch_limit,
-                "search_type": "memory",
+                "search_type": q.search_type_value(),
+                "enrich": true,
             });
             if let Some(s) = q.strategy.as_deref().filter(|s| !s.is_empty()) {
                 body["strategy"] = serde_json::json!(s);
             }
-            if let Some(t) = q.tag.as_deref().filter(|t| !t.is_empty()) {
-                body["tags"] = serde_json::json!([t]);
+            let tags = q.tag_list();
+            if !tags.is_empty() {
+                body["tags"] = serde_json::json!(tags);
             }
             if let Some(ns) = q.namespace.as_deref().filter(|n| !n.is_empty()) {
                 body["namespace"] = serde_json::json!(ns);
+            }
+            if let Some(ent) = q.entity.as_deref().filter(|n| !n.is_empty()) {
+                body["entity"] = serde_json::json!(ent);
+            }
+            if let Some(cat) = q.category.as_deref().filter(|n| !n.is_empty()) {
+                body["category"] = serde_json::json!(cat);
+            }
+            if let Some(ms) = q.min_score {
+                body["min_score"] = serde_json::json!(ms);
+            }
+            if q.strict {
+                body["strict"] = serde_json::json!(true);
+            }
+            if let Some(ts) = q.at.as_deref().filter(|n| !n.is_empty()) {
+                body["at"] = serde_json::json!(ts);
+            }
+            if let Some(ts) = q.after.as_deref().filter(|n| !n.is_empty()) {
+                body["after"] = serde_json::json!(ts);
+            }
+            if let Some(ts) = q.before.as_deref().filter(|n| !n.is_empty()) {
+                body["before"] = serde_json::json!(ts);
             }
             let resp = match client.post("/recall", &body).await {
                 Ok(r) => r,
@@ -583,13 +723,16 @@ pub async fn handle_list_memories(
         }
         "fts" => {
             // POST /search {query, limit, tags?, namespace?}
+            // Upstream /search only supports tags + namespace, so other
+            // filters are intentionally ignored in keyword mode.
             let fetch_limit = (offset + limit + 1).min(SEARCH_FETCH_CAP);
             let mut body = serde_json::json!({
                 "query": query,
                 "limit": fetch_limit,
             });
-            if let Some(t) = q.tag.as_deref().filter(|t| !t.is_empty()) {
-                body["tags"] = serde_json::json!([t]);
+            let tags = q.tag_list();
+            if !tags.is_empty() {
+                body["tags"] = serde_json::json!(tags);
             }
             if let Some(ns) = q.namespace.as_deref().filter(|n| !n.is_empty()) {
                 body["namespace"] = serde_json::json!(ns);
@@ -621,7 +764,7 @@ pub async fn handle_list_memories(
         }
         // "list" (default)
         _ => {
-            // POST /list {limit, offset, tag?, namespace?, include_meta:true}
+            // POST /list {limit, offset, tag?, namespace?, at?, include_meta:true}
             // include_meta (uteke 0.17.0 #1188) asks upstream for exact
             // pagination metadata instead of guessing from page length.
             let mut body = serde_json::json!({
@@ -629,11 +772,18 @@ pub async fn handle_list_memories(
                 "offset": offset,
                 "include_meta": true,
             });
+            // /list supports a single tag; prefer the legacy `tag` param,
+            // falling back to the first tag in `tags`.
             if let Some(t) = q.tag.as_deref().filter(|t| !t.is_empty()) {
+                body["tag"] = serde_json::json!(t);
+            } else if let Some(t) = q.tag_list().first() {
                 body["tag"] = serde_json::json!(t);
             }
             if let Some(ns) = q.namespace.as_deref().filter(|n| !n.is_empty()) {
                 body["namespace"] = serde_json::json!(ns);
+            }
+            if let Some(ts) = q.at.as_deref().filter(|n| !n.is_empty()) {
+                body["at"] = serde_json::json!(ts);
             }
             let resp = match client.post("/list", &body).await {
                 Ok(r) => r,

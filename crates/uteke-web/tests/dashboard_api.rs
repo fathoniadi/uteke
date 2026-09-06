@@ -432,6 +432,101 @@ async fn semantic_mode_passes_strategy_through() {
     assert_eq!(body["strategy"], "graph");
 }
 
+/// A richer recall response used to exercise `DashboardMemory` normalization.
+const RECALL_JSON_FULL: &str = r#"[{"result_type":"memory","score":0.5,"content":"hello world","memory_id":"m1","tags":["t1","t2"],"memory_type":"note","importance":0.7,"pinned":false,"namespace":"default","created_at":"2026-01-01T00:00:00Z","source":"meeting.md","source_type":"file","metadata":{"project":"uteke"},"linked_doc_slugs":["doc/arch"],"access_count":3,"last_accessed":"2026-06-01T12:00:00Z"}]"#;
+
+#[tokio::test]
+async fn semantic_mode_sends_enrich_search_type_and_filters() {
+    let (upstream, recall_seen, _list_seen) = spawn_capturing_upstream(RECALL_JSON, "[]").await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/memories?mode=semantic&q=hello&search_type=all&tags=project%3Auteke,auth&entity=api-gateway&category=architecture&min_score=0.75&strict=true&at=2026-06-01T12%3A00%3A00Z&after=2026-01-01T00%3A00%3A00Z&before=2026-12-31T23%3A59%3A59Z&limit=20")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bodies = recall_seen.lock().unwrap();
+    assert_eq!(bodies.len(), 1);
+    let body: serde_json::Value = serde_json::from_str(&bodies[0]).unwrap();
+    assert_eq!(body["search_type"], "all");
+    assert_eq!(body["enrich"], true);
+    assert_eq!(body["tags"], serde_json::json!(["project:uteke", "auth"]));
+    assert_eq!(body["entity"], "api-gateway");
+    assert_eq!(body["category"], "architecture");
+    assert_eq!(body["min_score"], 0.75);
+    assert_eq!(body["strict"], true);
+    assert_eq!(body["at"], "2026-06-01T12:00:00Z");
+    assert_eq!(body["after"], "2026-01-01T00:00:00Z");
+    assert_eq!(body["before"], "2026-12-31T23:59:59Z");
+}
+
+#[tokio::test]
+async fn semantic_mode_normalizes_rich_upstream_fields() {
+    let (upstream, _recall_seen, _list_seen) =
+        spawn_capturing_upstream(RECALL_JSON_FULL, "[]").await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/memories?mode=semantic&q=hello&limit=20")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert_eq!(json["memories"][0]["id"], "m1");
+    assert_eq!(json["memories"][0]["score"], 0.5);
+    assert_eq!(json["memories"][0]["source"], "meeting.md");
+    assert_eq!(json["memories"][0]["source_type"], "file");
+    assert_eq!(json["memories"][0]["metadata"]["project"], "uteke");
+    assert_eq!(json["memories"][0]["linked_doc_slugs"][0], "doc/arch");
+    assert_eq!(json["memories"][0]["access_count"], 3);
+    assert_eq!(
+        json["memories"][0]["last_accessed"],
+        "2026-06-01T12:00:00+00:00"
+    );
+    assert_eq!(json["memories"][0]["result_type"], "memory");
+}
+
+#[tokio::test]
+async fn semantic_mode_treats_document_results_as_documents() {
+    const DOC_JSON: &str = r#"[{"result_type":"document","score":0.6,"content":"Doc excerpt","doc_slug":"doc/arch","doc_title":"Architecture","tags":["docs"],"created_at":"2026-01-01T00:00:00Z"}]"#;
+    let (upstream, _recall_seen, _list_seen) = spawn_capturing_upstream(DOC_JSON, "[]").await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/memories?mode=semantic&q=hello&search_type=doc&limit=20")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert_eq!(json["memories"][0]["id"], "doc/arch");
+    assert_eq!(json["memories"][0]["memory_type"], "document");
+    assert_eq!(json["memories"][0]["result_type"], "document");
+}
+
 #[tokio::test]
 async fn list_mode_reads_has_more_from_include_meta_envelope() {
     // One memory in the page (less than limit=20) but has_more=true —

@@ -578,6 +578,53 @@ hr { border-color: var(--u-border); opacity: 0.5; }
         <div class="col-12 d-flex gap-2">
           <button class="btn btn-sm btn-outline-secondary" onclick="resetFilters()"><i class="bi bi-arrow-counterclockwise"></i> Reset</button>
           <button class="btn btn-sm btn-primary" onclick="openCreate()"><i class="bi bi-plus-lg"></i> New memory</button>
+          <button class="btn btn-sm btn-outline-secondary ms-auto" type="button" data-bs-toggle="collapse" data-bs-target="#adv-filters" aria-expanded="false"><i class="bi bi-sliders"></i> Advanced</button>
+        </div>
+      </div>
+      <div class="collapse mt-2" id="adv-filters">
+        <div class="row g-2 align-items-end">
+          <div class="col-6 col-md-3">
+            <label class="form-label small text-muted mb-1">Search in</label>
+            <select id="search_type" class="form-select form-select-sm" onchange="S.search_type=this.value; S.offset=0; load();" title="Semantic search scope: memories, documents, or both.">
+              <option value="memory">Memories</option>
+              <option value="all">Memories + Documents</option>
+              <option value="doc">Documents only</option>
+            </select>
+          </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label small text-muted mb-1">Tags (comma)</label>
+            <input id="tags" class="form-control form-control-sm" placeholder="tag1, tag2" onchange="S.tags=this.value.trim(); S.offset=0; load();" oninput="S.tags=this.value.trim();" title="Comma-separated tags. Overrides the single Tag filter above.">
+          </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label small text-muted mb-1">Entity</label>
+            <input id="entity" class="form-control form-control-sm" placeholder="e.g. api-gateway" onchange="S.entity=this.value.trim(); S.offset=0; load();" oninput="S.entity=this.value.trim();">
+          </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label small text-muted mb-1">Category</label>
+            <input id="category" class="form-control form-control-sm" placeholder="e.g. architecture" onchange="S.category=this.value.trim(); S.offset=0; load();" oninput="S.category=this.value.trim();">
+          </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label small text-muted mb-1">Min score</label>
+            <input id="min_score" type="number" min="0" max="1" step="0.05" class="form-control form-control-sm" placeholder="0–1" onchange="S.min_score=this.value; S.offset=0; load();" oninput="S.min_score=this.value;">
+          </div>
+          <div class="col-6 col-md-3 d-flex align-items-center">
+            <div class="form-check form-check-inline">
+              <input id="strict" class="form-check-input" type="checkbox" onchange="S.strict=this.checked; S.offset=0; load();">
+              <label class="form-check-label small text-muted" for="strict">Strict threshold</label>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label small text-muted mb-1">As of (time-travel)</label>
+            <input id="at" type="datetime-local" class="form-control form-control-sm" onchange="S.at=this.value; S.offset=0; load();" oninput="S.at=this.value;">
+          </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label small text-muted mb-1">After</label>
+            <input id="after" type="datetime-local" class="form-control form-control-sm" onchange="S.after=this.value; S.offset=0; load();" oninput="S.after=this.value;">
+          </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label small text-muted mb-1">Before</label>
+            <input id="before" type="datetime-local" class="form-control form-control-sm" onchange="S.before=this.value; S.offset=0; load();" oninput="S.before=this.value;">
+          </div>
         </div>
       </div>
     </div>
@@ -1161,7 +1208,7 @@ applyTheme(getStoredTheme());
 applyMode(getStoredMode());
 
 const TYPES = ["fact","procedure","preference","decision","context","note","insight","reference","event"];
-let S = { q:"", mode:"list", strategy:"", ns:"", tag:"", sort:"created:desc", offset:0, limit:20, rows:[], hasMore:false };
+let S = { q:"", mode:"list", strategy:"", ns:"", tag:"", tags:"", entity:"", category:"", min_score:"", strict:false, at:"", after:"", before:"", search_type:"memory", sort:"created:desc", offset:0, limit:20, rows:[], hasMore:false };
 let detailMem = null, forgetId = null, editId = null;
 let bsModals = {};
 
@@ -1273,8 +1320,19 @@ async function load(){
   const params = new URLSearchParams();
   if(S.q) params.set("q", S.q);
   if(S.mode) params.set("mode", S.mode);
-  if(S.mode==="semantic" && S.strategy) params.set("strategy", S.strategy);
-  if(S.tag) params.set("tag", S.tag);
+  if(S.mode==="semantic") {
+    if(S.strategy) params.set("strategy", S.strategy);
+    if(S.search_type && S.search_type !== "memory") params.set("search_type", S.search_type);
+    if(S.min_score) params.set("min_score", S.min_score);
+    if(S.strict) params.set("strict", "true");
+    if(S.at) params.set("at", new Date(S.at).toISOString());
+    if(S.after) params.set("after", new Date(S.after).toISOString());
+    if(S.before) params.set("before", new Date(S.before).toISOString());
+    if(S.entity) params.set("entity", S.entity);
+    if(S.category) params.set("category", S.category);
+  }
+  if(S.tags) params.set("tags", S.tags);
+  else if(S.tag) params.set("tag", S.tag);
   if(S.ns) params.set("namespace", S.ns);
   params.set("limit", S.limit);
   params.set("offset", S.offset);
@@ -1310,33 +1368,46 @@ function render(){
   else {
     $("empty").style.display="none";
     tb.innerHTML = rows.map(m=>{
+      const isDoc = m.result_type === "document";
       const tagsPills = (m.tags||[]).map(t=>`<span class="badge bg-info text-white tag-pill me-1" onclick="event.stopPropagation(); filterTag('${esc(t)}')">${esc(t)}</span>`).join("");
+      const docLinks = (m.linked_doc_slugs||[]).length
+        ? `<div class="mem-docs small mt-1">${m.linked_doc_slugs.map(s=>`<a href="#/documents/${encodeURIComponent(s)}" class="badge bg-light text-dark border me-1 mb-1 text-decoration-none" onclick="event.stopPropagation()"><i class="bi bi-file-earmark-text me-1"></i>${esc(s)}</a>`).join("")}</div>`
+        : "";
       const imp = m.importance??0;
       const pin = m.pinned ? "★" : "☆";
       const pinClr = m.pinned ? "text-warning" : "text-secondary";
+      const typeIcon = isDoc ? '<i class="bi bi-file-earmark-text text-info me-1"></i>' : `<span class="${pinClr} cursor-pointer" onclick="togglePin('${esc(m.id)}', ${!m.pinned})" title="Pin">${pin}</span>`;
+      const typeBadge = isDoc
+        ? '<span class="badge type-badge bg-info">document</span>'
+        : `<span class="badge type-badge bg-${typeColor(m.memory_type||"note")}">${esc(m.memory_type||"note")}</span>`;
+      const clickAction = isDoc
+        ? `window.location.hash='#/documents/${encodeURIComponent(m.id)}'`
+        : `openDetail('${esc(m.id)}')`;
       return `<div class="card mem-card mb-2">
         <div class="card-body py-2 px-3">
           <div class="d-flex align-items-center gap-2 mb-1">
-            <span class="${pinClr} cursor-pointer" onclick="togglePin('${esc(m.id)}', ${!m.pinned})" title="Pin">${pin}</span>
-            <span class="id-mono cursor-pointer" onclick="openDetail('${esc(m.id)}')">${esc(shortId(m.id))}</span>
-            <span class="badge type-badge bg-${typeColor(m.memory_type||"note")}">${esc(m.memory_type||"note")}</span>
+            ${typeIcon}
+            <span class="id-mono cursor-pointer" onclick="${clickAction}">${esc(shortId(m.id))}</span>
+            ${typeBadge}
             ${m.deprecated ? `<span class="badge bg-warning text-white" title="Superseded by a newer memory">superseded</span>` : ""}
+            ${m.score != null ? `<span class="badge bg-light text-dark border" title="Relevance score">${m.score.toFixed(3)}</span>` : ""}
             <div class="dropdown ms-auto">
               <button class="btn btn-sm btn-outline-secondary border-0 py-0 px-1" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-three-dots-vertical"></i></button>
               <ul class="dropdown-menu dropdown-menu-end">
-                <li><button class="dropdown-item" type="button" onclick="openEdit('${esc(m.id)}')"><i class="bi bi-pencil me-1"></i>Edit</button></li>
-                <li><button class="dropdown-item text-danger" type="button" onclick="openForget('${esc(m.id)}', '${esc(shortId(m.id))}')"><i class="bi bi-trash me-1"></i>Delete</button></li>
+                ${isDoc ? '' : `<li><button class="dropdown-item" type="button" onclick="openEdit('${esc(m.id)}')"><i class="bi bi-pencil me-1"></i>Edit</button></li>`}
+                ${isDoc ? '' : `<li><button class="dropdown-item text-danger" type="button" onclick="openForget('${esc(m.id)}', '${esc(shortId(m.id))}')"><i class="bi bi-trash me-1"></i>Delete</button></li>`}
               </ul>
             </div>
           </div>
-          <div class="trunc cursor-pointer" onclick="openDetail('${esc(m.id)}')">${esc(truncSentences(m.content, 2))}</div>
+          <div class="trunc cursor-pointer" onclick="${clickAction}">${esc(truncSentences(m.content, 2))}</div>
           <div class="d-flex align-items-center gap-2 mt-1">
             <span class="small text-muted">Importance</span>
             <span class="imp-bar"><span style="width:${Math.round(imp*100)}%;background:${impColor(imp)}"></span></span>
             <span class="small text-muted">${imp.toFixed(2)}</span>
           </div>
           ${tagsPills ? `<div class="mem-tags">${tagsPills}</div>` : ""}
-          <div class="mem-created">created: ${fmtDate(m.created_at)}</div>
+          ${docLinks}
+          <div class="mem-created small text-muted">created: ${fmtDate(m.created_at)}${m.source ? ` · source: ${esc(m.source)}` : ''}</div>
         </div>
       </div>`;
     }).join("");
@@ -1407,6 +1478,7 @@ function onSearchInput(){
 function onModeChange(){
   S.mode = $("mode").value; S.offset = 0;
   $("strategy").disabled = S.mode !== "semantic";
+  $("search_type").disabled = S.mode !== "semantic";
   if((S.mode==="semantic"||S.mode==="fts")){
     if(!S.q) $("q").focus();
     if(S.sort==="created:desc"){ S.sort="score:desc"; $("sort").value="score:desc"; }
@@ -1421,7 +1493,7 @@ function onTagChange(){ S.tag = $("tag").value; S.offset = 0; load(); }
 function onSortChange(){ S.sort = $("sort").value; render(); }
 function onPerPage(){ S.limit = parseInt($("perpage").value,10)||20; S.offset = 0; load(); }
 function filterTag(t){ $("tag").value = t; S.tag = t; S.offset = 0; load(); }
-function resetFilters(){ clearTimeout(debounceT); const lim = S.limit||20; S={q:"",mode:"list",strategy:"",ns:"",tag:"",sort:"created:desc",offset:0,limit:lim,rows:[],hasMore:false}; $("q").value=""; $("mode").value="list"; $("strategy").value=""; $("strategy").disabled=true; $("ns").value=""; $("tag").value=""; $("sort").value="created:desc"; loadTags(); loadStats(); load(); }
+function resetFilters(){ clearTimeout(debounceT); const lim = S.limit||20; S={q:"",mode:"list",strategy:"",ns:"",tag:"",tags:"",entity:"",category:"",min_score:"",strict:false,at:"",after:"",before:"",search_type:"memory",sort:"created:desc",offset:0,limit:lim,rows:[],hasMore:false}; $("q").value=""; $("mode").value="list"; $("strategy").value=""; $("strategy").disabled=true; $("search_type").value="memory"; $("ns").value=""; $("tag").value=""; $("tags").value=""; $("entity").value=""; $("category").value=""; $("min_score").value=""; $("strict").checked=false; $("at").value=""; $("after").value=""; $("before").value=""; $("sort").value="created:desc"; loadTags(); loadStats(); load(); }
 function pagePrev(){ if(S.offset>=S.limit){ S.offset-=S.limit; load(); } }
 function pageNext(){ if(S.hasMore){ S.offset+=S.limit; load(); } }
 function goToPage(p){ const off = (p - 1) * S.limit; if(off >= 0 && off !== S.offset){ S.offset = off; load(); } }
@@ -1431,6 +1503,16 @@ async function openDetail(id){
   try {
     const m = await apiGet("/dashboard/api/memories/"+encodeURIComponent(id));
     detailMem = m;
+    const metaJson = m.metadata ? JSON.stringify(m.metadata, null, 2) : "";
+    const metaBlock = metaJson && metaJson !== "{}"
+      ? `<dt class="col-sm-3">Metadata</dt><dd class="col-sm-9"><pre class="small bg-light p-2 rounded" style="max-height:160px;overflow:auto">${esc(metaJson)}</pre></dd>`
+      : "";
+    const sourceBlock = m.source || m.source_type
+      ? `<dt class="col-sm-3">Source</dt><dd class="col-sm-9">${esc(m.source_type||"")} ${m.source ? `· ${esc(m.source)}` : ""}</dd>`
+      : "";
+    const accessBlock = m.access_count != null
+      ? `<dt class="col-sm-3">Access</dt><dd class="col-sm-9">${m.access_count} time${m.access_count===1?"":"s"}${m.last_accessed ? ` · last: ${fmtDate(m.last_accessed)}` : ""}</dd>`
+      : "";
     $("detail-body").innerHTML = `
       <dl class="row mb-0">
         <dt class="col-sm-3">ID</dt><dd class="col-sm-9 id-mono">${esc(m.id)}</dd>
@@ -1443,6 +1525,9 @@ async function openDetail(id){
         <dt class="col-sm-3">Namespace</dt><dd class="col-sm-9">${esc(m.namespace||"—")}</dd>
         <dt class="col-sm-3">Created</dt><dd class="col-sm-9">${fmtDate(m.created_at)}</dd>
         ${m.score!=null ? `<dt class="col-sm-3">Score</dt><dd class="col-sm-9">${m.score.toFixed(3)}</dd>` : ""}
+        ${sourceBlock}
+        ${accessBlock}
+        ${metaBlock}
         <dt class="col-sm-3">Documents</dt><dd class="col-sm-9" id="detail-docrefs"><span class="text-muted small">Loading…</span></dd>
         <dt class="col-sm-3">Feedback</dt><dd class="col-sm-9">
           <button class="btn btn-sm btn-outline-success me-1" onclick="memFeedback('helpful')"><i class="bi bi-hand-thumbs-up"></i> Helpful</button>
@@ -1654,11 +1739,22 @@ function init(){
   $("q").addEventListener("input", onSearchInput);
   $("mode").addEventListener("change", onModeChange);
   $("strategy").addEventListener("change", onStrategyChange);
+  $("search_type").addEventListener("change", e => { S.search_type=e.target.value; S.offset=0; load(); });
   $("ns").addEventListener("change", onNsChange);
   $("tag").addEventListener("change", onTagChange);
   $("sort").addEventListener("change", onSortChange);
   $("perpage").addEventListener("change", onPerPage);
   $("e-imp").addEventListener("input", e => $("e-imp-val").textContent = parseFloat(e.target.value).toFixed(2));
+  // Set advanced filter inputs from state.
+  $("search_type").value = S.search_type;
+  $("tags").value = S.tags;
+  $("entity").value = S.entity;
+  $("category").value = S.category;
+  $("min_score").value = S.min_score;
+  $("strict").checked = S.strict;
+  $("at").value = S.at;
+  $("after").value = S.after;
+  $("before").value = S.before;
   loadProfile(); loadNamespaces(); loadTags(); loadStats(); load();
 }
 init();
