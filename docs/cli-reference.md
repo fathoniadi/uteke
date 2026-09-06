@@ -108,7 +108,7 @@ uteke remember "User prefers dark mode" --tags pref --namespace my-agent
 
 ## uteke recall
 
-Unified search combining vector similarity with FTS5 full-text search, ranked by Reciprocal Rank Fusion (RRF). Searches **both memories and documents** by default (unified mode). Hot memories (accessed within 7 days) get a score boost.
+Unified search combining vector similarity with FTS5 full-text search, ranked by Reciprocal Rank Fusion (RRF). Default strategy since v0.16.0: **fusion** — a weighted RRF of the vector and hybrid rankings. Searches **both memories and documents** by default (unified mode). Hot memories (accessed within 7 days) get a score boost.
 
 ```bash
 uteke recall "What framework does the API use?"
@@ -120,6 +120,8 @@ uteke recall "config" --category infrastructure --limit 5
 uteke recall "API architecture" --type doc
 # Search memories only (backward compatible)
 uteke recall "deployment" --type memory
+# Explain mode (#1160): show the ranking signals behind each result
+uteke recall "database caching" --explain
 ```
 
 | Flag | Description |
@@ -130,6 +132,7 @@ uteke recall "deployment" --type memory
 | `--category <cat>` | Filter results to a specific category |
 | `--content-format <fmt>` | Content display: `auto` (detect), `text`, `json` (pretty-print JSON memories) |
 | `--where <key=value>` | Filter by JSON field on structured memories (e.g. `--where role=CTO`) |
+| `--explain` | Show the ranking signals behind each result (#1160): final score, strategy, vector similarity + rank, FTS rank, RRF score with per-channel fusion contributions, and jaccard/salience/recency/graph boost deltas. Memory-only — not available with `--type doc` |
 | `--json` | Output as JSON array |
 
 ## uteke search
@@ -262,9 +265,57 @@ uteke lifecycle restore <memory-id>
 
 See [Configuration → Memory Lifecycle](/configuration#memory-lifecycle) for lifecycle config options.
 
+## uteke provenance
+
+Show the full provenance report for a memory (#1172) — who wrote it, from
+what source, its trust tier, whether the content still matches the hash
+recorded at write time, and the complete event chain with actor +
+evidence.
+
+```bash
+# Human-readable audit report
+uteke provenance <memory-id>
+
+# JSON (for tooling)
+uteke provenance <memory-id> --json
+```
+
+Hash verdicts: `✓ matches` (content unchanged since write), `✗ MISMATCH`
+(content modified after write — investigate), `—` (memory predates
+schema v18; hash will be recorded on next content update).
+
+## uteke supersede
+
+Resolve a conflict: mark the old memory superseded by a newer one (#1053) —
+wires the supersession edge pair, soft-deprecates the old memory, and records
+the resolution in the contradiction ledger (#1172).
+
+```bash
+uteke supersede <old-memory-id> <new-memory-id> --reason "decision pivot"
+```
+
+## uteke contradictions
+
+Inspect the contradiction resolution ledger (#1172) — memories that were
+superseded by conflict resolution and are not restored.
+
+```bash
+# List the resolution ledger
+uteke contradictions list
+
+# Filter by namespace, cap entries
+uteke contradictions list --namespace ops --limit 20
+
+# JSON (for tooling)
+uteke contradictions list --json
+
+# Restore a superseded memory (full UUID or unambiguous prefix)
+uteke contradictions undo <memory-id>
+```
+
 ## uteke namespace
 
-Manage namespaces — list, inspect, and switch defaults.
+Manage namespaces — list, inspect, switch defaults, and manage members (#1181).
 
 ```bash
 # List all namespaces with counts
@@ -275,7 +326,22 @@ uteke namespace stats my-agent
 
 # Switch default namespace (saved to config)
 uteke namespace switch my-agent
+
+# Move a memory to another namespace (#1181 — no re-embed)
+uteke namespace move <memory-id> other-ns
+
+# Rename a namespace — merges into an existing target (#1181)
+uteke namespace rename old-ns new-ns
+
+# Delete a namespace with an explicit strategy for its memories (#1181)
+uteke namespace delete temp-ns --strategy merge --target archive --confirm
+uteke namespace delete ghost-ns --strategy deprecate --confirm
 ```
+
+Delete strategies: `refuse` (default — refuses while any memory references the
+name), `merge` (move all memories to `--target`, the name vanishes), or
+`deprecate` (soft-delete — restorable via `uteke lifecycle`/promote, never
+hard-deleted). `--confirm` is required for `delete`.
 
 Namespace resolution order: `--namespace flag` → `UTEKE_NAMESPACE` env → `uteke.toml` → `"default"`
 
@@ -309,8 +375,9 @@ uteke recall "deployment process" --at 2026-06-01T12:00:00Z
 # Relationship graph traversal
 uteke recall "auth" --related --depth 2
 
-# Recall strategy (vector | fts5 | hybrid | graph)
-uteke recall "auth" --strategy hybrid   # default — vector + FTS5 (RRF fusion)
+# Recall strategy (fusion | vector | fts5 | hybrid | graph)
+uteke recall "auth" --strategy fusion   # default since 0.16.0 — weighted RRF of vector + hybrid rankings
+uteke recall "auth" --strategy hybrid   # vector + FTS5 fused via RRF (k=60)
 uteke recall "auth" --strategy vector   # vector similarity only
 uteke recall "auth" --strategy fts5     # full-text search only
 uteke recall "auth" --strategy graph    # hybrid + graph-signal reranking (#378)
@@ -394,7 +461,21 @@ uteke room list-documents "project-kickoff"
 
 # List rooms that reference a document (#859, positional slug)
 uteke room list-rooms "architecture-spec"
+
+# Consolidate a room's memories (#1088) — dry-run by default, no LLM calls
+uteke room consolidate "project-kickoff"
+
+# Execute consolidation (LLM calls + writes; budget-capped)
+uteke room consolidate "project-kickoff" --apply --max-calls 20
 ```
+
+### Room consolidation notes (#1088)
+
+- **Dry-run default**: shows memory count, batches, and estimated LLM calls — zero API calls.
+- **`--apply`** requires LLM config (same `[extraction]` setup as `import --extract`).
+- **`--max-calls`** (default 10) is a hard budget: failed LLM calls count too, batches beyond the cap are skipped.
+- Source memories are **soft-deprecated** (never deleted), each carrying a `consolidated into <id>` reason.
+- New consolidated records pass a provenance policy gate (hedging language, trust tier) before being written.
 
 ## uteke bench
 
@@ -757,8 +838,8 @@ uteke timeline <memory-id> --json
 | `uteke consolidate` | Find and merge duplicate memories |
 | `uteke prune` | Remove deprecated/expired memories |
 | `uteke stats` | Show store statistics with tier breakdown |
-| `uteke export` | Export memories to JSONL (no embeddings) |
-| `uteke import <file>` | Import memories from JSONL/Markdown/text (`--extract` distills with an LLM) |
+| `uteke export` | Export memories to JSONL (no embeddings) · `--full` = structural export: manifest + rooms/graph/edges/documents/chunks/timeline (round-trips the whole store, format `structural-v1`) |
+| `uteke import <file>` | Import memories from JSONL/Markdown/text (`--extract` distills with an LLM) — auto-detects structural exports (manifest first line) and restores the full store; restored memories re-embed via `uteke repair --reembed` |
 | `uteke doctor` | Health check (DB, index, model, consistency) |
 | `uteke verify` | Verify DB and index consistency |
 | `uteke verify-checksums --binary <path>` | Verify binary integrity against SHA256 checksums |

@@ -1,7 +1,7 @@
 //! Core CRUD operations — insert, get, delete, update, list, search, count.
 
 use crate::Error;
-use crate::memory::types::{DEFAULT_NAMESPACE, Memory};
+use crate::memory::types::Memory;
 use rusqlite::{OptionalExtension, params};
 
 use super::store::{row_to_memory, serialize_embedding};
@@ -111,8 +111,8 @@ impl super::Store {
 
         self.conn
             .execute(
-                "INSERT INTO memories (id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+                "INSERT INTO memories (id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type, deprecated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
                 params![
                     memory.id,
                     memory.content,
@@ -134,6 +134,8 @@ impl super::Store {
                     memory.slug,
                     memory.source,
                     memory.source_type,
+                    memory.author_type,
+                    memory.deprecated_at.map(|t| t.to_rfc3339()),
                 ],
             )
             .map_err(|e| Error::db("Failed to insert memory", e))?;
@@ -168,7 +170,7 @@ impl super::Store {
     pub fn get_by_id(&self, id: &str) -> Result<Option<Memory>, Error> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug FROM memories WHERE id = ?1")
+            .prepare("SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type, deprecated_at FROM memories WHERE id = ?1")
             .map_err(|e| Error::db("Failed to prepare statement for get_by_id", e))?;
 
         let result = stmt
@@ -195,7 +197,7 @@ impl super::Store {
         for chunk in ids.chunks(CHUNK_SIZE) {
             let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
             let sql = format!(
-                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug FROM memories WHERE id IN ({placeholders})"
+                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type, deprecated_at FROM memories WHERE id IN ({placeholders})"
             );
             let mut stmt = self
                 .conn
@@ -257,7 +259,7 @@ impl super::Store {
         let ns = namespace.unwrap_or(crate::memory::types::DEFAULT_NAMESPACE);
         let mut stmt = self
             .conn
-            .prepare("SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug FROM memories WHERE id = ?1 AND namespace = ?2")
+            .prepare("SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type, deprecated_at FROM memories WHERE id = ?1 AND namespace = ?2")
             .map_err(|e| Error::db("Failed to prepare statement for get_by_id_in_namespace", e))?;
 
         let result = stmt
@@ -463,7 +465,7 @@ impl super::Store {
                          created_at, updated_at, namespace, access_count, \
                          last_accessed, deprecated, valid_from, valid_until, \
                          memory_type, importance, pinned, content_type, slug \
-                         FROM memories WHERE namespace = ?1 AND EXISTS \
+                         FROM memories WHERE namespace = ?1 AND deprecated = 0 AND EXISTS \
                          (SELECT 1 FROM memory_tags WHERE memory_id = memories.id AND tag = ?2) \
                          ORDER BY created_at DESC LIMIT ?3 OFFSET ?4",
                     )
@@ -508,7 +510,7 @@ impl super::Store {
                          created_at, updated_at, namespace, access_count, \
                          last_accessed, deprecated, valid_from, valid_until, \
                          memory_type, importance, pinned, content_type, slug \
-                         FROM memories WHERE EXISTS \
+                         FROM memories WHERE deprecated = 0 AND EXISTS \
                          (SELECT 1 FROM memory_tags WHERE memory_id = memories.id AND tag = ?1) \
                          ORDER BY created_at DESC LIMIT ?2 OFFSET ?3",
                     )
@@ -546,13 +548,18 @@ impl super::Store {
     }
 
     /// Search memories by content using LIKE (simple full-text for v2).
+    /// Search memories by content using LIKE (simple full-text for v2).
+    ///
+    /// `namespace=None` searches ACROSS all namespaces (matches list(None)
+    /// semantics, #526) — previously it coerced None to the default namespace,
+    /// hiding results from other namespaces from cross-namespace callers
+    /// such as MCP `uteke_search` invoked without a namespace argument (#1051).
     pub fn search_content(
         &self,
         query: &str,
         namespace: Option<&str>,
         limit: usize,
     ) -> Result<Vec<Memory>, Error> {
-        let ns = namespace.unwrap_or(DEFAULT_NAMESPACE);
         // Escape SQL LIKE wildcards so user input is treated as literal text
         // Using '!' as escape character — unambiguous on all platforms
         let escaped = query
@@ -560,18 +567,31 @@ impl super::Store {
             .replace('%', "!%")
             .replace('_', "!_");
         let pattern = format!("%{escaped}%");
-        let mut stmt = self
-            .conn
-            .prepare(
+        let sql = match namespace {
+            Some(_) => {
                 "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug
                  FROM memories WHERE namespace = ?1 AND deprecated = 0 AND content LIKE ?2 ESCAPE '!'
-                 ORDER BY created_at DESC LIMIT ?3",
-            )
+                 ORDER BY created_at DESC LIMIT ?3"
+            }
+            None => {
+                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug
+                 FROM memories WHERE deprecated = 0 AND content LIKE ?1 ESCAPE '!'
+                 ORDER BY created_at DESC LIMIT ?2"
+            }
+        };
+        let mut stmt = self
+            .conn
+            .prepare(sql)
             .map_err(|e| Error::db("database operation", e))?;
 
-        let rows = stmt
-            .query_map(params![ns, pattern, limit as i64], row_to_memory)
-            .map_err(|e| Error::db("database operation", e))?;
+        let rows = match namespace {
+            Some(ns) => stmt
+                .query_map(params![ns, pattern, limit as i64], row_to_memory)
+                .map_err(|e| Error::db("database operation", e))?,
+            None => stmt
+                .query_map(params![pattern, limit as i64], row_to_memory)
+                .map_err(|e| Error::db("database operation", e))?,
+        };
 
         let mut memories = Vec::new();
         for row in rows {
@@ -585,12 +605,14 @@ impl super::Store {
     pub fn load_all(&self, namespace: Option<&str>) -> Result<Vec<Memory>, Error> {
         // Filter out NULL embeddings — they cannot be inserted into the vector
         // index and cause dimension-mismatch crashes during build() (#992).
+        // Deprecated (soft-deleted) rows are excluded: they are hidden from
+        // recall and must not re-enter the vector index on repair/verify (#1047).
         let sql = match namespace {
             Some(_) => {
-                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug FROM memories WHERE namespace = ?1 AND embedding IS NOT NULL ORDER BY created_at"
+                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type, deprecated_at FROM memories WHERE namespace = ?1 AND embedding IS NOT NULL AND deprecated = 0 ORDER BY created_at"
             }
             None => {
-                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug FROM memories WHERE embedding IS NOT NULL ORDER BY created_at"
+                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type, deprecated_at FROM memories WHERE embedding IS NOT NULL AND deprecated = 0 ORDER BY created_at"
             }
         };
 
@@ -626,7 +648,55 @@ impl super::Store {
         Ok(memories)
     }
 
-    /// Count total memories, optionally filtered by namespace.
+    /// Load active memories whose embedding is missing (SQL NULL or empty blob).
+    ///
+    /// Unlike [`load_all`], this deliberately includes NULL-embedding rows: it is
+    /// the scan source for `repair --reembed` (#1146). The NULL guard in
+    /// `load_all` exists to keep such rows out of `index.build()` (#992), but
+    /// reusing it as the reembed scan made NULL rows permanently invisible to
+    /// the one tool designed to fix them.
+    pub fn load_missing_embeddings(&self, namespace: Option<&str>) -> Result<Vec<Memory>, Error> {
+        let sql = match namespace {
+            Some(_) => {
+                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type, deprecated_at FROM memories WHERE namespace = ?1 AND (embedding IS NULL OR length(embedding) = 0) AND deprecated = 0 ORDER BY created_at"
+            }
+            None => {
+                "SELECT id, content, embedding, tags, metadata, created_at, updated_at, namespace, access_count, last_accessed, deprecated, valid_from, valid_until, memory_type, importance, pinned, content_type, slug, source, source_type, author_type, deprecated_at FROM memories WHERE (embedding IS NULL OR length(embedding) = 0) AND deprecated = 0 ORDER BY created_at"
+            }
+        };
+
+        let mut memories = Vec::new();
+        match namespace {
+            Some(ns) => {
+                let mut stmt = self
+                    .conn
+                    .prepare(sql)
+                    .map_err(|e| Error::db("database operation", e))?;
+                let rows = stmt
+                    .query_map(params![ns], row_to_memory)
+                    .map_err(|e| Error::db("database store operation", e))?;
+                for row in rows {
+                    let m = row.map_err(|e| Error::db("database operation", e))?;
+                    memories.push(m);
+                }
+            }
+            None => {
+                let mut stmt = self
+                    .conn
+                    .prepare(sql)
+                    .map_err(|e| Error::db("database operation", e))?;
+                let rows = stmt
+                    .query_map([], row_to_memory)
+                    .map_err(|e| Error::db("database operation", e))?;
+                for row in rows {
+                    let m = row.map_err(|e| Error::db("database operation", e))?;
+                    memories.push(m);
+                }
+            }
+        }
+        Ok(memories)
+    }
+
     /// Count memories that are expected to have a vector-index entry.
     ///
     /// Mirrors the `WHERE embedding IS NOT NULL` filter in `load_all()`
@@ -659,7 +729,41 @@ impl super::Store {
         Ok(count)
     }
 
+    /// Count ACTIVE (non-deprecated) memories, optionally filtered by namespace.
+    ///
+    /// Uniform contract: deprecated (soft-deleted) rows are excluded for both
+    /// the namespaced and un-namespaced paths. The vector index only ever holds
+    /// active rows (#1047), so counts from this method are directly comparable
+    /// against `index.len()` in doctor/verify.
+    ///
+    /// Callers that need totals INCLUDING deprecated rows (reporting, stats)
+    /// should use [`Store::count_all`].
     pub fn count(&self, namespace: Option<&str>) -> Result<usize, Error> {
+        let count: usize = match namespace {
+            Some(ns) => self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM memories WHERE namespace = ?1 AND deprecated = 0",
+                    params![ns],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|e| Error::db("database operation", e))? as usize,
+            None => self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM memories WHERE deprecated = 0",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|e| Error::db("database operation", e))? as usize,
+        };
+        Ok(count)
+    }
+
+    /// Count ALL memories including deprecated (soft-deleted) rows,
+    /// optionally filtered by namespace. For reporting/audit callers that
+    /// need raw totals; index comparisons should use [`Store::count`].
+    pub fn count_all(&self, namespace: Option<&str>) -> Result<usize, Error> {
         let count: usize = match namespace {
             Some(ns) => self
                 .conn
@@ -850,6 +954,31 @@ impl super::Store {
     }
 }
 
+impl super::Store {
+    /// Count PINNED (never-decay) memories, optionally per namespace (#1052).
+    pub fn count_pinned(&self, namespace: Option<&str>) -> Result<usize, Error> {
+        let count: usize = match namespace {
+            Some(ns) => self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM memories WHERE namespace = ?1 AND pinned = 1 AND deprecated = 0",
+                    params![ns],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|e| Error::db("count_pinned", e))? as usize,
+            None => self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM memories WHERE pinned = 1 AND deprecated = 0",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|e| Error::db("count_pinned", e))? as usize,
+        };
+        Ok(count)
+    }
+}
+
 #[cfg(test)]
 mod content_type_tests {
     use super::*;
@@ -927,6 +1056,7 @@ mod content_type_tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "fact".to_string(),
@@ -936,6 +1066,7 @@ mod content_type_tests {
             slug: None,
             source: None,
             source_type: "user".to_string(),
+            author_type: "agent".to_string(),
         };
         store.insert(&memory).unwrap();
 
@@ -959,6 +1090,7 @@ mod content_type_tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "fact".to_string(),
@@ -968,6 +1100,7 @@ mod content_type_tests {
             slug: None,
             source: None,
             source_type: "user".to_string(),
+            author_type: "agent".to_string(),
         };
         store.insert(&memory).unwrap();
 
@@ -982,7 +1115,7 @@ mod content_type_tests {
         let store = super::super::store::Store::open(":memory:").unwrap();
         assert!(store.column_exists("content_type"));
         let version = store.schema_version().unwrap();
-        assert_eq!(version, 15); // v15 = room_documents junction (#689); v14 = FTS5 memory_type column (#662); v13 = global docs no namespace (#614); v12 = hierarchical docs (#438); v11 = document engine (#406); v10 = source columns (#348); v9 = timeline (#347); v8 = edges + slug; v7 = graph
+        assert_eq!(version, crate::memory::store::CURRENT_SCHEMA_VERSION); // v16 = author_type (#1083); v15 = room_documents junction (#689); v14 = FTS5 memory_type column (#662); v13 = global docs no namespace (#614); v12 = hierarchical docs (#438); v11 = document engine (#406); v10 = source columns (#348); v9 = timeline (#347); v8 = edges + slug; v7 = graph
     }
 
     #[test]
@@ -1006,6 +1139,7 @@ mod content_type_tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "fact".to_string(),
@@ -1015,6 +1149,7 @@ mod content_type_tests {
             slug: None,
             source: None,
             source_type: "user".to_string(),
+            author_type: "agent".to_string(),
         };
         store.insert(&m1).unwrap();
 

@@ -52,7 +52,25 @@ Returns the agent-facing memory tools guide for system prompt injection (#1010).
 
 #### 🟢 `GET` `/namespaces`
 
-List all namespaces in the memory store
+List all namespaces in the memory store. `?with_counts=true` adds `count` (total) plus `active`/`deprecated` breakdown fields (#1181).
+
+*Related: `1181`*
+
+#### 🟡 `POST` `/namespaces/rename`
+
+Rename a namespace (`{from, to}`). When `to` already exists this is a merge; the old name vanishes (derived view). Returns `{from, to, moved, target_existed}` (#1181).
+
+**Request body**: [`NamespaceRenameRequest`](#namespacerenamerequest)
+
+*Related: `1181`*
+
+#### 🟡 `POST` `/namespaces/delete`
+
+Delete a namespace with an explicit strategy for its memories (`{name, strategy, target?}`): `refuse` (default — 409 while any memory references the name), `merge` (move all memories to `target`), or `deprecate` (soft-delete — restorable, never hard-deleted) (#1181).
+
+**Request body**: [`NamespaceDeleteRequest`](#namespacedeleterequest)
+
+*Related: `1181`*
 
 #### 🟢 `GET` `/stats`
 
@@ -81,6 +99,26 @@ Update an existing memory's content and/or metadata.
 #### 🟢 `GET` `/graph`
 
 Get graph edges for a memory. Accepts `?id=...` query param.
+
+#### 🟢 `GET` `/provenance`
+
+Full provenance report for a memory (#1172): author/source fields, trust tier, source hash at write vs live-recomputed content hash (tamper evidence), and the full timeline event chain with actor + evidence. Accepts `?id=...` query param.
+
+*Related: `1172`*
+
+#### 🟢 `GET` `/contradictions`
+
+List superseded-but-not-restored memories (#1172) — the auditable contradiction resolution ledger (deprecated rows carrying a live superseded_by edge). Accepts `?namespace=...&limit=...`.
+
+*Related: `1172`*
+
+#### 🟡 `POST` `/contradictions/undo`
+
+Undo a contradiction resolution (#1172): restore the retired memory to active, remove the supersession pair, and record supersession_undone provenance events. Body: `{id}`.
+
+**Request body**: [`ContradictionUndoRequest`](#contradictionundorequest)
+
+*Related: `1172`*
 
 #### 🟡 `POST` `/lifecycle/cycle`
 
@@ -139,6 +177,14 @@ Remove orphaned memories (no room, no graph edges).
 Merge similar/duplicate memories automatically.
 
 **Request body**: [`ConsolidateRequest`](#consolidaterequest)
+
+#### 🟡 `POST` `/consolidate/pair`
+
+Consolidate a single caller-chosen duplicate pair: keep id_keep, deprecate (or hard-delete) id_remove.
+
+**Request body**: [`ConsolidatePairRequest`](#consolidatepairrequest)
+
+*Related: `1076`*
 
 #### 🟡 `POST` `/aging`
 
@@ -225,13 +271,17 @@ Get memories that reference a specific document.
 
 #### 🟡 `POST` `/graph/edge`
 
-Add a directed edge between two memories.
+Add a directed edge between two memories. Accepts memory IDs (a linked graph node is ensured automatically, #1180) or existing graph node IDs. Returns `{ok, source_node, target_node}`.
 
 **Request body**: [`GraphEdgeRequest`](#graphedgerequest)
 
+*Related: `1180`*
+
 #### 🔴 `DELETE` `/graph/edge`
 
-Remove an edge between two memories. Accepts `?from=...&to=...` query params.
+Remove an edge between two nodes. Accepts memory IDs or graph node IDs via `?source=...&target=...` query params (#1180).
+
+*Related: `1180`*
 
 #### 🟢 `GET` `/edges`
 
@@ -254,7 +304,7 @@ Store a new memory. Accepts content, tags, namespace, type, metadata.
 
 #### 🟡 `POST` `/recall`
 
-Semantic search — recall memories by meaning. Returns ranked results.
+Semantic search — recall memories by meaning. Returns ranked results. Set `explain: true` (#1160) to include per-result ranking signals (vector similarity/rank, RRF contributions, boosts); memory-only recall.
 
 *Excludes deprecated memories from results.*
 
@@ -270,7 +320,7 @@ Keyword search — find memories by matching words in content/tags.
 
 #### 🟡 `POST` `/list`
 
-List memories with optional filters (namespace, tags, sort, limit, offset).
+List memories with optional filters (namespace, tags, sort, limit, offset). Set `include_meta: true` (#1188) for a pagination envelope `{memories, total, has_more, next_offset}` instead of the bare array (not supported with `at`).
 
 *Excludes deprecated memories from results.*
 
@@ -335,6 +385,14 @@ Get room summary focused on document-type memories.
 
 List all rooms.
 
+#### 🟡 `POST` `/room/consolidate`
+
+Plan or execute segment-level LLM consolidation of room memories (#1088). Dry-run by default; `apply: true` executes with a hard budget cap. Write op — blocked for read-only tokens.
+
+**Request body**: JSON object (see handler source for fields)
+
+*Related: `#1088`*
+
 #### 🟡 `POST` `/room/stats`
 
 Get memory count for a room. Includes deprecated memories (known discrepancy vs /room/summary).
@@ -351,7 +409,7 @@ List all memories in a room (chronological). Accepts `?room_id=...` query param.
 
 #### 🔴 `DELETE` `/room/delete`
 
-Delete a room and all its memories. Accepts `?room_id=...` query param.
+Delete a room (unlink-only): room links are removed, memories and documents are preserved. Response: `{ deleted, unlinked_memories }`. Accepts `?room_id=...` query param.
 
 #### 🟡 `POST` `/room/document`
 
@@ -550,6 +608,11 @@ features on the actual server capability rather than a local CLI probe. |
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `at` | any | No | Time-travel: list memories that existed at this RFC3339 timestamp. |
+| `include_meta` | `boolean` | No | Pagination metadata (#1188): when true, respond with an envelope
+`{memories, total, has_more, next_offset}` instead of the bare array.
+Default false — the bare-array shape is unchanged for existing
+clients. Not supported with `at` (point-in-time listing returns the
+bare array regardless). |
 | `limit` | `integer` | No |  |
 | `namespace` | any | No |  |
 | `offset` | `integer` | No |  |
@@ -591,6 +654,7 @@ Request for memory feedback / trust scoring (#718).
 | `importance` | any | No | Set importance score (0.0–1.0). |
 | `memory_type` | any | No | Set memory type (fact, procedure, preference, decision, context, note, insight, reference, event). |
 | `metadata` | any | No | Replace metadata entirely with this object. |
+| `namespace` | any | No | Move the memory to this namespace (#1181). Plain column update — no re-embed. |
 | `pinned` | any | No | Set pinned state. |
 | `tags` | any | No | Replace tags entirely with this list. |
 
@@ -634,13 +698,20 @@ RFC3339 timestamp (#902). |
 When true, populates `linked_doc_slugs` on memory results and
 `linked_memory_ids` on document results. |
 | `entity` | any | No | Filter by entity metadata. |
+| `explain` | `boolean` | No | Explain mode (#1160): return per-result ranking signals alongside
+each memory. Memory-only recall — rejected (400) together with
+search_type/unified, at, before/after. |
 | `limit` | `integer` | No |  |
 | `min_score` | any | No | Minimum similarity score (0.0-1.0). Results below are filtered.
 Default: 0.0 (no filtering). Use `strict=true` for 0.5 default (#995). |
 | `namespace` | any | No |  |
 | `query` | `string` | Yes |  |
 | `search_type` | any | No | Search type filter: "all" (default, unified), "memory", or "doc" (#531). |
-| `strategy` | any | No | Recall strategy: "vector" (default), "fts5", "hybrid", or "graph" (#900). |
+| `strategy` | any | No | Recall strategy: "fusion" (default since 0.16.0), "vector", "fts5",
+"hybrid", or "graph" (#900, #1034, #1123).
+When absent, the server falls back to `[recall] default_strategy` from
+uteke.toml, then to "fusion" — matching the CLI default.
+Invalid values return HTTP 400. |
 | `strict` | `boolean` | No | Use strict threshold (defaults to 0.5 if min_score not set). |
 | `tags` | ``string``[] | No |  |
 
@@ -649,6 +720,7 @@ Default: 0.0 (no filtering). Use `strict=true` for 0.5 default (#995). |
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `author_type` | any | No | Author type: "human" | "agent" (#1083). Defaults to "agent" when omitted. |
 | `category` | any | No | Category — stored as metadata key "category". |
 | `content` | `string` | Yes |  |
 | `detect_contradiction` | `boolean` | No |  |
@@ -668,6 +740,8 @@ Accepts an object (e.g. {"project": "uteke"}). |
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `at` | any | No | Time-travel: recall room state as of this RFC3339 timestamp (#1082).
+Memories created after `at` (or invalidated before it) are excluded. |
 | `author` | any | No |  |
 | `limit` | `integer` | No |  |
 | `min_score` | any | No |  |

@@ -184,15 +184,31 @@ impl crate::Uteke {
         Ok(results)
     }
 
-    /// Delete a room and all its memory links.
-    /// Note: memories themselves are NOT deleted — they remain in their namespaces.
-    pub fn delete_room(&self, room_id: &str) -> Result<(), Error> {
+    /// Delete a room (unlink-only).
+    /// Returns the number of memory links removed; memories and documents
+    /// themselves are NOT deleted — they remain in their namespaces.
+    pub fn delete_room(&self, room_id: &str) -> Result<usize, Error> {
         self.store.delete_room(room_id)
     }
 
     /// Generate a summary of room discussion (topic clustering, no LLM needed).
+    /// Enriched with embedding-distance semantic segments (#1088) when
+    /// embeddings exist — these are the batching units for future
+    /// segment-level LLM consolidation.
     pub fn room_summary(&self, room_id: &str) -> Result<Option<RoomSummary>, Error> {
-        self.store.room_summary(room_id)
+        let mut summary = match self.store.room_summary(room_id)? {
+            Some(s) => s,
+            None => return Ok(None),
+        };
+        if summary.total_memories > 0 && summary.segments.is_none() {
+            // Segment only when embeddings are present; otherwise keep None.
+            let memories = self.store.recall_room(room_id, None, 0)?;
+            if memories.iter().any(|m| !m.embedding.is_empty()) {
+                let segmentation = self.room_segments_inner(room_id, &memories, 0.45, 12, 3)?;
+                summary.segments = Some(segmentation.segments);
+            }
+        }
+        Ok(Some(summary))
     }
 
     /// Get room summary with referenced documents populated.

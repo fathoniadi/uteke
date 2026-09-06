@@ -1069,7 +1069,7 @@ mod tests {
 
     fn mem(content: &str, tags: &[&str]) -> Memory {
         Memory {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: uuid::Uuid::now_v7().to_string(),
             content: content.to_string(),
             embedding: vec![],
             tags: tags.iter().map(|s| s.to_string()).collect(),
@@ -1080,6 +1080,7 @@ mod tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "fact".to_string(),
@@ -1089,6 +1090,7 @@ mod tests {
             slug: None,
             source: None,
             source_type: "user".to_string(),
+            author_type: "agent".to_string(),
         }
     }
 
@@ -1438,7 +1440,11 @@ mod tests {
     fn migration_dispatcher_reaches_v8() {
         let store = Store::open(":memory:").unwrap();
         let v = store.schema_version().unwrap();
-        assert_eq!(v, 15, "fresh store must reach CURRENT_SCHEMA_VERSION=15");
+        assert_eq!(
+            v,
+            crate::memory::store::CURRENT_SCHEMA_VERSION,
+            "fresh store must reach CURRENT_SCHEMA_VERSION"
+        );
 
         // memory_edges table must exist and be queryable after migration.
         let n = store.count_memory_edges().unwrap();
@@ -2038,5 +2044,632 @@ mod tests {
             .edge_targets("ghost-mem", EDGE_REFERENCES_DOC)
             .unwrap();
         assert!(targets.is_empty());
+    }
+}
+
+/// Edge type marking the superseded (stale) side of a supersession pair (#1053).
+pub const EDGE_SUPERSEDED_BY: &str = "superseded_by";
+
+impl crate::Uteke {
+    /// Mark `old_id` as superseded by `new_id` (#1053).
+    ///
+    /// Wires a typed edge pair — `old → new: superseded_by` (the annotation
+    /// recall reads) and `new → old: supersedes` (navigable inverse) — then
+    /// soft-deprecates the old memory so it drops out of recall by default.
+    /// Both ids must exist and differ; self-supersession is rejected.
+    ///
+    /// Returns the ids of the pair for confirmation output.
+    pub fn supersede(
+        &self,
+        old_id: &str,
+        new_id: &str,
+        reason: Option<&str>,
+    ) -> Result<(String, String), Error> {
+        if old_id == new_id {
+            return Err(Error::validation(
+                "Cannot supersede a memory with itself (old_id == new_id)",
+            ));
+        }
+        let old = self
+            .store
+            .get_by_id(old_id)?
+            .ok_or_else(|| Error::validation(format!("Old memory not found: {old_id}")))?;
+        let new = self
+            .store
+            .get_by_id(new_id)?
+            .ok_or_else(|| Error::validation(format!("New memory not found: {new_id}")))?;
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let reason_text = match reason {
+            Some(r) => format!("superseded by {new_id}: {r}"),
+            None => format!("superseded by {new_id}"),
+        };
+        let conn = self.graph_store();
+        // Edge pair AND the soft-deprecation in ONE transaction — a failure
+        // in any of the three writes rolls the whole supersession back
+        // (cora finding: committing edges before deprecating leaves a
+        // superseded_by pointer on a still-active memory).
+        {
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| Error::db("begin supersede tx", e))?;
+            // Re-supersession: drop this memory's PREVIOUS supersession pair
+            // first (code-scanning #687) — otherwise stacked superseded_by
+            // edges accumulate and supersession_of() becomes ambiguous.
+            tx.execute(
+                "DELETE FROM memory_edges WHERE source_id = ?1 AND edge_type = ?2",
+                params![old.id, EDGE_SUPERSEDED_BY],
+            )
+            .map_err(|e| Error::db("clear prior superseded_by edge", e))?;
+            tx.execute(
+                "DELETE FROM memory_edges WHERE target_id = ?1 AND edge_type = ?2",
+                params![old.id, EDGE_SUPERSEDES],
+            )
+            .map_err(|e| Error::db("clear prior supersedes edge", e))?;
+            tx.execute(
+                "INSERT OR IGNORE INTO memory_edges (source_id, target_id, edge_type, created_at) VALUES (?1,?2,?3,?4)",
+                params![old.id, new.id, EDGE_SUPERSEDED_BY, now],
+            )
+            .map_err(|e| Error::db("insert superseded_by edge", e))?;
+            tx.execute(
+                "INSERT OR IGNORE INTO memory_edges (source_id, target_id, edge_type, created_at) VALUES (?1,?2,?3,?4)",
+                params![new.id, old.id, EDGE_SUPERSEDES, now],
+            )
+            .map_err(|e| Error::db("insert supersedes edge", e))?;
+            tx.execute(
+                "UPDATE memories SET deprecated = 1, valid_until = ?1, deprecate_reason = ?2, updated_at = ?1, deprecated_at = ?1 WHERE id = ?3 AND deprecated = 0",
+                params![now, reason_text, old.id],
+            )
+            .map_err(|e| Error::db("deprecate superseded memory", e))?;
+            // Re-supersession of an already-deprecated memory: refresh the
+            // reason/timestamp so the resolution ledger reflects the CURRENT
+            // winner (stale "superseded by <old winner>" text would make the
+            // ledger contradict the edge pair — cora finding, #1172 F2).
+            tx.execute(
+                "UPDATE memories SET deprecate_reason = ?1, updated_at = ?2, deprecated_at = ?2 WHERE id = ?3 AND deprecated = 1",
+                params![reason_text, now, old.id],
+            )
+            .map_err(|e| Error::db("refresh superseded reason", e))?;
+            tx.commit()
+                .map_err(|e| Error::db("commit supersede tx", e))?;
+        }
+
+        // Provenance chain (#1172 Fase 2): record the resolution as
+        // provenance-bearing events on BOTH sides — the retired memory gets
+        // `superseded` (why it lost), the winner gets `updated` pointing
+        // back (what it replaced). Best-effort, like all timeline writes.
+        self.store
+            .add_timeline_event_with_provenance(
+                &old.id,
+                crate::timeline::TimelineEventType::Superseded,
+                Some(&serde_json::json!({
+                    "superseded_by": new.id,
+                    "reason": reason_text,
+                })),
+                Some("system:supersede"),
+                Some(&serde_json::json!([
+                    {"memory": new.id, "relation": "supersedes_this"},
+                    {"memory": old.id, "relation": "subject"},
+                ])),
+            )
+            .unwrap_or_else(|e| tracing::warn!("superseded event failed for {}: {e}", old.id));
+        self.store
+            .add_timeline_event_with_provenance(
+                &new.id,
+                crate::timeline::TimelineEventType::Updated,
+                Some(&serde_json::json!({
+                    "superseded": old.id,
+                    "reason": reason_text,
+                })),
+                Some("system:supersede"),
+                Some(&serde_json::json!([
+                    {"memory": old.id, "relation": "superseded_by_this"},
+                ])),
+            )
+            .unwrap_or_else(|e| tracing::warn!("supersedes event failed for {}: {e}", new.id));
+
+        // Same hygiene soft_forget() applies to deprecated rows: remove from
+        // the vector index (deprecated memories must not surface in
+        // semantic recall — code-scanning #685) and invalidate the recall
+        // cache for the namespace.
+        {
+            let mut index = self
+                .index
+                .write()
+                .map_err(|_| Error::lock("index write lock during supersede"))?;
+            if !index.remove(&old.id) {
+                tracing::debug!(
+                    "Vector index entry not found during supersede for id={} (ok if never embedded)",
+                    old.id
+                );
+            }
+            if let Err(e) = index.save() {
+                tracing::warn!("Failed to persist vector index after supersede: {e}");
+            }
+        }
+        self.recall_cache.invalidate_namespace(&old.namespace);
+
+        Ok((old.id, new.id))
+    }
+
+    /// Look up the supersession target for a memory, if any (#1053).
+    /// Returns `Some(new_id)` when an outgoing `superseded_by` edge exists.
+    /// Deterministic: latest by created_at, then id (code-scanning #687 —
+    /// bare LIMIT 1 with no ORDER BY could return any row).
+    pub fn supersession_of(&self, memory_id: &str) -> Result<Option<String>, Error> {
+        let conn = self.graph_store();
+        let target: Option<String> = conn
+            .query_row(
+                "SELECT target_id FROM memory_edges WHERE source_id = ?1 AND edge_type = ?2 \
+                 ORDER BY created_at DESC, target_id ASC LIMIT 1",
+                params![memory_id, EDGE_SUPERSEDED_BY],
+                |r| r.get(0),
+            )
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(Error::db("supersession lookup", other)),
+            })?;
+        Ok(target)
+    }
+
+    /// Undo a supersession (#1172 Fase 2): restore the deprecated memory to
+    /// active, remove the supersession edge pair, and record
+    /// `supersession_undone` provenance events on both memories.
+    ///
+    /// Returns `Ok(None)` when the memory has no supersession to undo;
+    /// `Ok(Some(undone_id))` on success. The previously-winning memory stays
+    /// untouched and active — both now live side by side, with the full
+    /// history auditable via provenance.
+    pub fn undo_supersession(&self, memory_id: &str) -> Result<Option<String>, Error> {
+        let superseded_by = match self.supersession_of(memory_id)? {
+            Some(new_id) => new_id,
+            None => return Ok(None),
+        };
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let conn = self.graph_store();
+        // Restore AND edge-pair removal in ONE transaction — a failure in any
+        // write rolls the whole undo back. Committing the restore first would
+        // leave a live superseded_by pair on an ACTIVE memory if the edge
+        // deletes failed (the exact partial state the supersede tx comment
+        // warns about) — cora finding on the #1172 F2 branch.
+        {
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| Error::db("begin undo_supersession tx", e))?;
+            tx.execute(
+                "UPDATE memories SET deprecated = 0, valid_until = NULL, deprecate_reason = NULL, deprecated_at = NULL, updated_at = ?1 WHERE id = ?2 AND deprecated = 1",
+                params![now, memory_id],
+            )
+            .map_err(|e| Error::db("restore superseded memory", e))?;
+            tx.execute(
+                "DELETE FROM memory_edges WHERE source_id = ?1 AND edge_type = ?2 AND target_id = ?3",
+                params![memory_id, EDGE_SUPERSEDED_BY, superseded_by],
+            )
+            .map_err(|e| Error::db("delete superseded_by edge", e))?;
+            tx.execute(
+                "DELETE FROM memory_edges WHERE source_id = ?1 AND edge_type = ?2 AND target_id = ?3",
+                params![superseded_by, EDGE_SUPERSEDES, memory_id],
+            )
+            .map_err(|e| Error::db("delete supersedes edge", e))?;
+            tx.commit()
+                .map_err(|e| Error::db("commit undo_supersession tx", e))?;
+        }
+
+        // Post-commit side effects (same contract as promote()): re-add to
+        // the vector index and invalidate the recall cache.
+        if let Some(memory) = self.store.get_by_id(memory_id).ok().flatten() {
+            if !memory.embedding.is_empty() {
+                let mut index = self
+                    .index
+                    .write()
+                    .map_err(|_| Error::lock("index write lock during undo_supersession"))?;
+                if let Err(e) = index.insert(&memory.id, &memory.embedding) {
+                    tracing::warn!(
+                        "Failed to re-insert memory id={} into vector index during undo_supersession: {e}",
+                        memory.id
+                    );
+                }
+                let _ = index.save();
+            }
+            self.recall_cache.invalidate_namespace(&memory.namespace);
+        }
+
+        // Provenance events on both sides — the undo itself is auditable.
+        self.store
+            .add_timeline_event_with_provenance(
+                memory_id,
+                crate::timeline::TimelineEventType::SupersessionUndone,
+                Some(&serde_json::json!({
+                    "was_superseded_by": superseded_by,
+                })),
+                Some("system:undo_supersession"),
+                Some(&serde_json::json!([
+                    {"memory": superseded_by, "relation": "was_superseded_by"},
+                ])),
+            )
+            .unwrap_or_else(|e| {
+                tracing::warn!("supersession_undone event failed for {memory_id}: {e}")
+            });
+        self.store
+            .add_timeline_event_with_provenance(
+                &superseded_by,
+                crate::timeline::TimelineEventType::Updated,
+                Some(&serde_json::json!({
+                    "supersession_of": memory_id,
+                    "undone": true,
+                })),
+                Some("system:undo_supersession"),
+                Some(&serde_json::json!([
+                    {"memory": memory_id, "relation": "supersession_undone"},
+                ])),
+            )
+            .unwrap_or_else(|e| tracing::warn!("undo event failed for {superseded_by}: {e}"));
+
+        Ok(Some(superseded_by.to_string()))
+    }
+
+    /// List memories in a namespace that were superseded but not restored
+    /// (#1172 Fase 2) — the auditable resolution ledger: each entry carries
+    /// the retired memory, its winner (via provenance), and the reason.
+    /// Membership is EDGE-driven: a row is listed iff it is deprecated AND
+    /// carries a `superseded_by` edge — the exact predicate
+    /// `undo_supersession` resolves against. Free-text reason matching would
+    /// diverge (legacy custom reasons invisible; forget-reasons that mention
+    /// "superseded" falsely listed) — cora finding on the #1172 F2 branch.
+    pub fn contradiction_resolutions(
+        &self,
+        namespace: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<crate::DeprecatedMemoryInfo>, Error> {
+        let sql = if namespace.is_some() {
+            "SELECT m.id, m.content, m.memory_type, m.namespace, m.tags, m.importance, m.deprecated_at, m.deprecate_reason \
+             FROM memories m \
+             JOIN memory_edges e ON e.source_id = m.id AND e.edge_type = ?2 \
+             WHERE m.deprecated = 1 AND m.namespace = ?1 \
+             ORDER BY m.deprecated_at DESC LIMIT ?3"
+        } else {
+            "SELECT m.id, m.content, m.memory_type, m.namespace, m.tags, m.importance, m.deprecated_at, m.deprecate_reason \
+             FROM memories m \
+             JOIN memory_edges e ON e.source_id = m.id AND e.edge_type = ?1 \
+             WHERE m.deprecated = 1 \
+             ORDER BY m.deprecated_at DESC LIMIT ?2"
+        };
+        let mut stmt = self
+            .graph_store()
+            .prepare(sql)
+            .map_err(|e| Error::db("prepare contradiction_resolutions", e))?;
+        let map_row = |r: &rusqlite::Row| -> rusqlite::Result<crate::DeprecatedMemoryInfo> {
+            let tags_str: String = r.get(4)?;
+            let tags = serde_json::from_str::<Vec<String>>(&tags_str).unwrap_or_default();
+            Ok(crate::DeprecatedMemoryInfo {
+                id: r.get(0)?,
+                content: r.get(1)?,
+                memory_type: r.get(2)?,
+                namespace: r.get(3)?,
+                tags,
+                importance: r.get(5).unwrap_or(0.5),
+                deprecated_at: r
+                    .get::<_, Option<String>>(6)?
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+                    .map(|dt| dt.with_timezone(&chrono::Utc)),
+                deprecate_reason: r.get(7)?,
+            })
+        };
+        let rows = match namespace {
+            Some(ns) => stmt
+                .query_map(params![ns, EDGE_SUPERSEDED_BY, limit as i64], map_row)
+                .map_err(|e| Error::db("query contradiction_resolutions", e))?,
+            // Both variants bind every placeholder positionally (?1..?n).
+            // (The original no-ns variant declared LIMIT ?2 while binding a
+            // single param → runtime bind error, caught by the #1172 F2 MCP
+            // roundtrip test.)
+            None => stmt
+                .query_map(params![EDGE_SUPERSEDED_BY, limit as i64], map_row)
+                .map_err(|e| Error::db("query contradiction_resolutions", e))?,
+        };
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| Error::db("contradiction_resolutions row", e))?);
+        }
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod supersession_tests {
+    use crate::Uteke;
+    use rusqlite::params;
+
+    /// #1053: supersede wires both edges + deprecates old; supersession_of
+    /// resolves the pointer; promote restores.
+    #[test]
+    fn test_supersede_pair_and_lookup() {
+        let dir = std::env::temp_dir().join(format!("ss-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
+
+        let embedding = vec![0.5_f32; 768];
+        let old = uteke
+            .remember_precomputed(
+                "old decision: trait Store polymorphism",
+                &[],
+                None,
+                Some("ss-ns"),
+                "decision",
+                "text",
+                &embedding,
+            )
+            .unwrap();
+        let new = uteke
+            .remember_precomputed(
+                "new decision: port to Postgres, no trait",
+                &[],
+                None,
+                Some("ss-ns"),
+                "decision",
+                "text",
+                &embedding,
+            )
+            .unwrap();
+
+        // Self-supersession rejected.
+        assert!(uteke.supersede(&old, &old, None).is_err());
+        // Unknown id rejected.
+        assert!(uteke.supersede(&old, "ffffffff", None).is_err());
+
+        let (o, n) = uteke.supersede(&old, &new, Some("ADR-0005 pivot")).unwrap();
+        assert_eq!((o.as_str(), n.as_str()), (old.as_str(), new.as_str()));
+
+        // Pointer resolves.
+        assert_eq!(
+            uteke.supersession_of(&old).unwrap().as_deref(),
+            Some(new.as_str())
+        );
+        assert_eq!(uteke.supersession_of(&new).unwrap(), None);
+
+        // Old memory soft-deprecated (hidden from list, restorable).
+        let m = uteke.get_by_id(&old).unwrap().unwrap();
+        assert!(m.deprecated, "old memory soft-deprecated");
+        let listed = uteke.list(None, 100, 0, Some("ss-ns")).unwrap();
+        assert!(listed.iter().all(|x| x.id != old));
+
+        // Deprecated memory must also leave the VECTOR INDEX — otherwise it
+        // still surfaces in semantic recall (code-scanning #685).
+        {
+            let idx = uteke.index.read().unwrap();
+            let needle = vec![0.5_f32; 768];
+            let hits = idx.search(&needle, 10, 100);
+            assert!(
+                hits.iter().all(|(id, _)| id != &old),
+                "superseded memory must not remain in the vector index"
+            );
+        }
+
+        // Both edges exist.
+        let conn = uteke.graph_store();
+        let fwd: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_edges WHERE source_id=?1 AND target_id=?2 AND edge_type='superseded_by'",
+                params![old, new],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let inv: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_edges WHERE source_id=?1 AND target_id=?2 AND edge_type='supersedes'",
+                params![new, old],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!((fwd, inv), (1, 1));
+
+        // Re-supersession replaces the pair (code-scanning #687): a second
+        // target must not stack a second superseded_by edge.
+        let third = uteke
+            .remember_precomputed(
+                "third decision: final word",
+                &[],
+                None,
+                Some("ss-ns"),
+                "decision",
+                "text",
+                &embedding,
+            )
+            .unwrap();
+        uteke.supersede(&old, &third, None).unwrap();
+        assert_eq!(
+            uteke.supersession_of(&old).unwrap().as_deref(),
+            Some(third.as_str()),
+            "latest supersession wins"
+        );
+        let stacked: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_edges WHERE source_id=?1 AND edge_type='superseded_by'",
+                params![old],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stacked, 1, "no stacked superseded_by edges");
+
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// #1172 Fase 2: supersede writes provenance-bearing events on both
+    /// sides; contradiction_resolutions lists the retired memory; undo
+    /// restores it, removes the pair, and records supersession_undone.
+    #[test]
+    fn supersession_evidence_chain_and_undo() {
+        let dir = std::env::temp_dir().join(format!("chain-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
+        let embedding = vec![0.6_f32; 768];
+
+        let old = uteke
+            .remember_precomputed(
+                "old claim: deploy at 8am",
+                &[],
+                None,
+                Some("chain-ns"),
+                "fact",
+                "text",
+                &embedding,
+            )
+            .unwrap();
+        let new = uteke
+            .remember_precomputed(
+                "new claim: deploy at 9am",
+                &[],
+                None,
+                Some("chain-ns"),
+                "fact",
+                "text",
+                &embedding,
+            )
+            .unwrap();
+
+        uteke
+            .supersede(&old, &new, Some("corrected deploy time"))
+            .unwrap();
+
+        // The retired memory's provenance carries the superseded event with
+        // actor + evidence pointing at the winner.
+        let report = uteke.provenance(&old).unwrap().expect("old exists");
+        let superseded = report
+            .events
+            .iter()
+            .find(|e| e.event_type == "superseded")
+            .expect("superseded event recorded");
+        assert_eq!(superseded.actor.as_deref(), Some("system:supersede"));
+        let evidence = superseded.evidence.as_ref().expect("evidence");
+        assert_eq!(evidence[0]["memory"], serde_json::json!(new));
+        // Supersede always sets a deprecation reason — verified via the
+        // superseded event's reason payload.
+        assert!(
+            superseded.event_data.is_some(),
+            "superseded event must carry the reason payload"
+        );
+
+        // The winner's chain carries a mirrored updated event.
+        let new_report = uteke.provenance(&new).unwrap().expect("new exists");
+        assert!(
+            new_report.events.iter().any(
+                |e| e.event_type == "updated" && e.actor.as_deref() == Some("system:supersede")
+            )
+        );
+
+        // The resolution ledger lists the retired memory.
+        let ledger = uteke
+            .contradiction_resolutions(Some("chain-ns"), 50)
+            .unwrap();
+        assert!(
+            ledger.iter().any(|d| d.id == old),
+            "retired memory in ledger"
+        );
+
+        // Undo: restores the old memory, removes the pair, records events.
+        let undone = uteke.undo_supersession(&old).unwrap();
+        assert_eq!(undone.as_deref(), Some(new.as_str()));
+        assert!(
+            uteke.undo_supersession(&old).unwrap().is_none(),
+            "second undo is a no-op"
+        );
+
+        let restored = uteke.provenance(&old).unwrap().expect("old exists");
+        assert!(!restored.deprecated, "undo must restore the memory");
+        assert!(
+            restored
+                .events
+                .iter()
+                .any(|e| e.event_type == "supersession_undone"),
+            "supersession_undone event recorded"
+        );
+        assert_eq!(
+            uteke.supersession_of(&old).unwrap(),
+            None,
+            "supersession pair removed"
+        );
+
+        // Ledger no longer contains the restored memory.
+        let ledger_after = uteke
+            .contradiction_resolutions(Some("chain-ns"), 50)
+            .unwrap();
+        assert!(!ledger_after.iter().any(|d| d.id == old));
+
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod resupersession_ledger_tests {
+    use crate::Uteke;
+
+    /// Regression (cora finding, #1172 F2): re-superseding an already-
+    /// deprecated memory must refresh deprecate_reason/deprecated_at so the
+    /// resolution ledger names the CURRENT winner, not the first one.
+    #[test]
+    fn resupersession_refreshes_ledger_reason() {
+        let dir = std::env::temp_dir().join(format!(
+            "rsled-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
+
+        let embedding = vec![0.5_f32; 768];
+        let mk = |content: &str| -> String {
+            uteke
+                .remember_precomputed(
+                    content,
+                    &[],
+                    None,
+                    Some("rs-ns"),
+                    "decision",
+                    "text",
+                    &embedding,
+                )
+                .unwrap()
+        };
+        let old = mk("old decision");
+        let mid = mk("mid decision");
+        let latest = mk("latest decision");
+
+        uteke.supersede(&old, &mid, Some("first pick")).unwrap();
+        // Re-supersession: old is already deprecated; winner changes.
+        uteke
+            .supersede(&old, &latest, Some("second pivot"))
+            .unwrap();
+
+        // Edge pointer is the current winner.
+        assert_eq!(
+            uteke.supersession_of(&old).unwrap().as_deref(),
+            Some(latest.as_str())
+        );
+
+        // Ledger must reflect the CURRENT winner and reason.
+        let ledger = uteke.contradiction_resolutions(Some("rs-ns"), 50).unwrap();
+        let entry = ledger
+            .iter()
+            .find(|d| d.id == old)
+            .expect("old memory in ledger");
+        let reason = entry.deprecate_reason.as_deref().unwrap_or("");
+        assert!(
+            reason.contains(latest.as_str()) && reason.contains("second pivot"),
+            "ledger reason must name the current winner: {reason}"
+        );
+        assert!(
+            !reason.contains(mid.as_str()),
+            "stale first-winner reason must be gone: {reason}"
+        );
+
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

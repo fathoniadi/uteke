@@ -2,7 +2,8 @@
 
 use crate::error::Error;
 use crate::memory::types::{
-    BulkDeleteResult, DEFAULT_NAMESPACE, Memory, MemoryTier, RecallStrategy, SearchResult, TagInfo,
+    BulkDeleteResult, DEFAULT_NAMESPACE, Memory, MemoryTier, NamespaceDeleteResult,
+    NamespaceRenameResult, RecallStrategy, SearchResult, TagInfo,
 };
 use crate::memory::vector::cosine_distance_to_similarity;
 use std::sync::Mutex;
@@ -179,17 +180,31 @@ impl crate::Uteke {
         } else {
             content.to_string()
         };
-        // Lazy-load embedder on first use
-        self.ensure_embedder()?;
-        // Retry embedding generation up to 3 times with exponential backoff.
-        // Embedding failures silently drop vector entries, causing desync (#621).
-        let embedding = self::retry_embed(&self.embedder, &embed_text)?;
+        // Lazy-load embedder on first use. #1166: when no backend is
+        // configured (backend == "" on a build without the onnx feature,
+        // or open_with_backend(.., None)), skip embedding entirely — the
+        // row is stored FTS5-only and stays keyword-searchable. Vector
+        // search for this row becomes available once an embedding is
+        // supplied via the injected-embedding path or `uteke repair`.
+        let embedding = if self.embedder_backend.is_empty() {
+            tracing::debug!("No embedding backend configured; storing memory FTS5-only (#1166)");
+            Vec::new()
+        } else {
+            self.ensure_embedder()?;
+            // Retry embedding generation up to 3 times with exponential backoff.
+            // Embedding failures silently drop vector entries, causing desync (#621).
+            self::retry_embed(&self.embedder, &embed_text)?
+        };
 
         // Dedup check: if an existing memory has cosine >= 0.95, return it
         // instead of creating a duplicate (#442 enhancement).
-        if let Some(existing_id) = self.check_duplicate(&embedding, namespace)? {
-            tracing::info!("Dedup: memory {existing_id} is nearly identical, skipping insert");
-            return Ok(existing_id);
+        // #1166: skip when no embedding was produced (no embedder) — cosine
+        // dedup is meaningless without vectors.
+        if !embedding.is_empty() {
+            if let Some(existing_id) = self.check_duplicate(&embedding, namespace)? {
+                tracing::info!("Dedup: memory {existing_id} is nearly identical, skipping insert");
+                return Ok(existing_id);
+            }
         }
 
         self.remember_precomputed(
@@ -277,7 +292,7 @@ impl crate::Uteke {
         content_type: &str,
         embedding: &[f32],
     ) -> Result<String, Error> {
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = uuid::Uuid::now_v7().to_string();
         let now = chrono::Utc::now();
 
         let memory = Memory {
@@ -292,6 +307,7 @@ impl crate::Uteke {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: Some(now),
             valid_until: None,
             memory_type: memory_type.to_string(),
@@ -301,6 +317,7 @@ impl crate::Uteke {
             slug: None,
             source: None,
             source_type: "user".to_string(),
+            author_type: "agent".to_string(),
         };
 
         // Lock granularity (#9, 2026-08-15): the index write lock used to be
@@ -320,6 +337,17 @@ impl crate::Uteke {
         // doesn't introduce a new class of inconsistency, just widens an
         // already-accepted, already-repairable window.
         self.store.insert(&memory)?;
+
+        // Provenance: record the content hash at write time (#1172 Fase 1).
+        // Best-effort — audits recompute this to detect post-write tampering.
+        use sha2::Digest;
+        let source_hash: String = sha2::Sha256::digest(content.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        if let Err(e) = self.store.set_source_hash(&id, Some(source_hash.as_str())) {
+            tracing::warn!("source_hash write failed for {id}: {e}");
+        }
 
         // Timeline: record creation (#347). This hook lives in the single
         // shared creation path so every remember() / remember_typed() /
@@ -344,7 +372,13 @@ impl crate::Uteke {
             .index
             .write()
             .map_err(|_| Error::lock("index write lock during remember"))?;
-        index.insert(&id, embedding)?;
+        // #1166: empty embedding = "no embedder configured" — store the row
+        // (already committed to SQLite above) without a vector entry. The
+        // row stays FTS5-searchable; `uteke repair` can backfill vectors
+        // once an embedder is available.
+        if !embedding.is_empty() {
+            index.insert(&id, embedding)?;
+        }
         // Retry index persistence up to 3 times (#621).
         // A failed save means the in-memory index has the entry but
         // on-disk doesn't → silent desync on next process launch.
@@ -375,7 +409,11 @@ impl crate::Uteke {
         // Cosine-similarity auto-linking (#401).
         // Must run AFTER index.insert() so the new memory is searchable.
         // Best-effort: errors logged, never fails remember().
-        self.auto_link_cosine(&id, embedding, Some(memory.namespace.as_str()));
+        // #1166: cosine auto-linking needs a real embedding; skip when the
+        // row was stored FTS5-only (no embedder configured).
+        if !embedding.is_empty() {
+            self.auto_link_cosine(&id, embedding, Some(memory.namespace.as_str()));
+        }
 
         Ok(id)
     }
@@ -396,6 +434,32 @@ impl crate::Uteke {
         min_score: f32,
         entity_filter: Option<&str>,
         category_filter: Option<&str>,
+    ) -> Result<Vec<SearchResult>, Error> {
+        self.recall_inner(
+            query,
+            limit,
+            tags_filter,
+            namespace,
+            min_score,
+            entity_filter,
+            category_filter,
+            false,
+        )
+    }
+
+    /// Same as `recall` but optionally keeps deprecated memories so temporal
+    /// filters (#1086) can decide their fate based on `deprecated_at`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn recall_inner(
+        &self,
+        query: &str,
+        limit: usize,
+        tags_filter: Option<&[&str]>,
+        namespace: Option<&str>,
+        min_score: f32,
+        entity_filter: Option<&str>,
+        category_filter: Option<&str>,
+        include_deprecated: bool,
     ) -> Result<Vec<SearchResult>, Error> {
         // Embed query outside any lock — CPU-intensive (~50ms), no shared state needed.
         // Only the embedder Mutex is held here, allowing concurrent index reads.
@@ -486,8 +550,9 @@ impl crate::Uteke {
                     }
                 }
 
-                // Filter deprecated memories (#748)
-                if memory.deprecated {
+                // Filter deprecated memories (#748) — unless the caller
+                // needs them for point-in-time filtering (#1086).
+                if memory.deprecated && !include_deprecated {
                     continue;
                 }
 
@@ -556,12 +621,23 @@ impl crate::Uteke {
         // and the caller re-applies threshold, ensuring correctness regardless
         // of what threshold a previous caller used.
         let cache_ns = namespace.unwrap_or("all");
+        // Boost window: salience/recency boosts can reorder results across the
+        // limit boundary, so we cache a larger candidate set and re-apply
+        // boosts + truncate on every read (#1037). Without the window, a
+        // memory outside the raw top-N could never enter warm results even
+        // though boosts would lift it there on a cold call.
+        let boost_window = (limit.saturating_mul(4)).saturating_add(16);
 
         if let Some(cached) = self
             .recall_cache
             .get(query, cache_ns, limit, tags_filter, strategy)
         {
             let mut results = cached;
+            // Cache stores RAW (pre-boost) scores — re-apply salience/recency
+            // boosts on every read so warm-cache results match cold-compute
+            // results exactly (#1037). Boosts are time-dependent, so applying
+            // them at cache-write time would freeze staleness into the cache.
+            self.apply_salience_recency_boosts(&mut results, limit);
             if min_score > 0.0 {
                 results.retain(|r| r.score >= min_score);
             }
@@ -569,70 +645,148 @@ impl crate::Uteke {
             return Ok(results);
         }
 
-        let results = match strategy {
+        // Compute against the boost window so the cached candidate set is
+        // large enough for boosts to reorder into the final top-N (#1037).
+        // min_score is passed as 0.0 to the underlying paths: thresholding
+        // happens AFTER boosts (on both cache-miss and cache-hit reads) so
+        // cold and warm calls filter identical boosted score sets.
+        let results = self.compute_recall(
+            strategy,
+            query,
+            boost_window,
+            tags_filter,
+            namespace,
+            min_score,
+        )?;
+
+        // Cache results for future queries (without min_score filtering,
+        // so cached results are reusable for any threshold). The cached set
+        // is the boost_window candidate set — truncated to `limit` on every
+        // read after boost re-application (#1037).
+        //
+        // Post-process in place (identical to the cache-hit read path):
+        // boost → sort → truncate → min_score. No put-then-get round-trip —
+        // a cache eviction or lock failure between put and get must never
+        // turn a successful computation into an empty result (cora finding).
+        let mut results = results;
+        results.truncate(boost_window);
+        let raw = results.clone();
+        self.recall_cache
+            .put(query, cache_ns, limit, tags_filter, strategy, raw);
+
+        self.apply_salience_recency_boosts(&mut results, limit);
+        if min_score > 0.0 {
+            results.retain(|r| r.score >= min_score);
+        }
+        results.truncate(limit);
+        Ok(results)
+    }
+
+    /// Raw strategy computation below the cache layer. Shared by the
+    /// dispatch path (cache-miss) and by Fusion, which runs two
+    /// sub-strategies and fuses their rankings (#1123).
+    ///
+    /// Callers must NOT cache inside this method — the dispatcher owns the
+    /// cache put and applies salience/recency boosts exactly once.
+    /// `pub(crate)` for the #1160 explanation path, which replays the same
+    /// building blocks stage-by-stage.
+    pub(crate) fn compute_recall(
+        &self,
+        strategy: RecallStrategy,
+        query: &str,
+        boost_window: usize,
+        tags_filter: Option<&[&str]>,
+        namespace: Option<&str>,
+        min_score: f32,
+    ) -> Result<Vec<SearchResult>, Error> {
+        match strategy {
             RecallStrategy::Vector => {
-                self.recall(query, limit, tags_filter, namespace, min_score, None, None)?
+                self.recall(query, boost_window, tags_filter, namespace, 0.0, None, None)
             }
             RecallStrategy::Fts5 => {
-                self.recall_fts5_only(query, limit, tags_filter, namespace, min_score)?
+                self.recall_fts5_only(query, boost_window, tags_filter, namespace, 0.0)
             }
             // Hybrid (RRF): min_score is passed but not used for filtering.
             // RRF scores are rank-based, not cosine similarity. Applying a
             // cosine threshold to RRF scores would incorrectly filter results.
             RecallStrategy::Hybrid => {
-                self.recall_rrf(query, limit, tags_filter, namespace, min_score)?
+                self.recall_rrf(query, boost_window, tags_filter, namespace, min_score)
             }
             // Graph (#378): hybrid RRF, then fuse graph-signal boosts.
             // The boost is additive + log-scaled, so isolated memories are
             // untouched and well-connected memories drift upward. Reranking
             // happens *before* caching so cache entries store the final scores.
             RecallStrategy::Graph => {
-                let rrf = self.recall_rrf(query, limit, tags_filter, namespace, min_score)?;
+                let rrf =
+                    self.recall_rrf(query, boost_window, tags_filter, namespace, min_score)?;
                 if self.graph_rerank_config.enabled && !rrf.is_empty() {
                     let ids: Vec<String> = rrf.iter().map(|r| r.memory.id.clone()).collect();
                     let signals =
                         crate::graph_rerank::compute_graph_signals(&self.store.conn, &ids)?;
-                    crate::graph_rerank::rerank_with_graph(rrf, &signals, &self.graph_rerank_config)
+                    Ok(crate::graph_rerank::rerank_with_graph(
+                        rrf,
+                        &signals,
+                        &self.graph_rerank_config,
+                    ))
                 } else {
-                    rrf
+                    Ok(rrf)
                 }
             }
-        };
-
-        // Cache results for future queries (without min_score filtering,
-        // so cached results are reusable for any threshold)
-        self.recall_cache.put(
-            query,
-            cache_ns,
-            limit,
-            tags_filter,
-            strategy,
-            results.clone(),
-        );
-
-        // Apply salience/recency boosts AFTER caching so cached entries
-        // store the raw scores (time-independent). Boosts are recomputed
-        // on every call (#352).
-        let mut results = results;
-        if !self.salience_recency_config.is_noop() {
-            let now = chrono::Utc::now();
-            for sr in &mut results {
-                sr.score = crate::salience_recency::apply_boosts(
-                    sr.score,
-                    &sr.memory,
-                    now,
-                    self.salience_recency_config,
-                );
+            // Fusion (#1123): run vector and hybrid rankings at boost_window
+            // depth, then weighted-RRF fuse them. Vector and hybrid fail on
+            // disjoint question sets; the fused ranking captures both sides'
+            // wins (fast50 R@5 0.9267 hybrid → 0.98 fusion). Sub-calls bypass
+            // the cache/boost layer — THIS dispatcher applies boosts once and
+            // caches the fused set, mirroring harness semantics.
+            RecallStrategy::Fusion => {
+                let vec_res = self.compute_recall(
+                    RecallStrategy::Vector,
+                    query,
+                    boost_window,
+                    tags_filter,
+                    namespace,
+                    0.0,
+                )?;
+                let hyb_res = self.compute_recall(
+                    RecallStrategy::Hybrid,
+                    query,
+                    boost_window,
+                    tags_filter,
+                    namespace,
+                    min_score,
+                )?;
+                Ok(rrf_fuse_weighted(
+                    vec_res,
+                    hyb_res,
+                    FUSION_W_VECTOR,
+                    FUSION_W_HYBRID,
+                ))
             }
-            results.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            results.truncate(limit);
         }
+    }
 
-        Ok(results)
+    /// Apply salience/recency boosts in place, then re-sort and truncate.
+    /// Shared by the cache-miss and cache-hit paths of `recall_hybrid` so
+    /// both produce identical scores for the same query (#1037).
+    fn apply_salience_recency_boosts(&self, results: &mut Vec<SearchResult>, limit: usize) {
+        if self.salience_recency_config.is_noop() {
+            return;
+        }
+        let now = chrono::Utc::now();
+        for sr in results.iter_mut() {
+            sr.score = crate::salience_recency::apply_boosts(
+                sr.score,
+                &sr.memory,
+                now,
+                self.salience_recency_config,
+            );
+        }
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(limit);
     }
 
     /// Recall memories and return a formatted context string for AI prompt injection.
@@ -1268,6 +1422,187 @@ impl crate::Uteke {
         self.store.list_namespaces_with_counts()
     }
 
+    /// List all namespaces with counts split by lifecycle state (#1181).
+    ///
+    /// Returns `[(namespace, active, deprecated)]` so clients can show honest
+    /// breakdowns — deprecated-only "ghost" namespaces look identical to
+    /// active ones in plain counts.
+    pub fn list_namespaces_with_lifecycle_counts(
+        &self,
+    ) -> Result<Vec<(String, usize, usize)>, Error> {
+        self.store.list_namespaces_with_lifecycle_counts()
+    }
+
+    /// Move a single memory to another namespace (#1181).
+    ///
+    /// Returns `Ok(false)` when the memory does not exist. Namespace is a
+    /// plain column and embeddings are content-based, so no re-embed happens.
+    pub fn move_memory(&self, id: &str, namespace: &str) -> Result<bool, Error> {
+        Self::validate_namespace_name(namespace)?;
+        let existing = match self.store.get_by_id(id)? {
+            Some(memory) => memory,
+            None => return Ok(false),
+        };
+        let moved =
+            self.store
+                .move_memory_namespace(id, namespace, &chrono::Utc::now().to_rfc3339())?;
+        if moved {
+            self.recall_cache.invalidate_namespace(&existing.namespace);
+            self.recall_cache.invalidate_namespace(namespace);
+        }
+        Ok(moved)
+    }
+
+    /// Rename a namespace, merging into the target when it exists (#1181).
+    ///
+    /// Single atomic `UPDATE` — the old name vanishes naturally because
+    /// namespaces are a derived view over `memories.namespace`.
+    pub fn rename_namespace(&self, from: &str, to: &str) -> Result<NamespaceRenameResult, Error> {
+        Self::validate_namespace_name(from)?;
+        Self::validate_namespace_name(to)?;
+        if from == to {
+            return Err(Error::Validation(
+                "Rename source and target namespaces are identical".to_string(),
+            ));
+        }
+        let (active, deprecated, total) = self.store.namespace_lifecycle_counts(from)?;
+        if total == 0 {
+            return Err(Error::Validation(format!("Namespace not found: {from}")));
+        }
+        let target_existed = self.store.namespace_lifecycle_counts(to)?.2 > 0;
+        let moved = self
+            .store
+            .rename_namespace(from, to, &chrono::Utc::now().to_rfc3339())?;
+        self.recall_cache.invalidate_namespace(from);
+        self.recall_cache.invalidate_namespace(to);
+        tracing::info!(
+            "Namespace rename/merge: '{from}' -> '{to}' moved {moved} memories \
+             ({active} active, {deprecated} deprecated, target_existed={target_existed})"
+        );
+        Ok(NamespaceRenameResult {
+            from: from.to_string(),
+            to: to.to_string(),
+            moved,
+            target_existed,
+        })
+    }
+
+    /// Delete a namespace with an explicit strategy for its memories (#1181).
+    ///
+    /// Namespaces are derived — the name only disappears once no memory
+    /// references it, so deletion must first decide the fate of its memories:
+    /// - `refuse`: fail while any memory (incl. deprecated) uses the name.
+    /// - `merge`: move all memories into `target` (the name disappears).
+    /// - `deprecate`: soft-delete all memories (recycle bin + TTL) — the name
+    ///   stays visible as a deprecated-only ghost with honest counts.
+    ///
+    /// There is no hard-delete path, consistent with the lifecycle design.
+    pub fn delete_namespace(
+        &self,
+        name: &str,
+        strategy: &str,
+        target: Option<&str>,
+    ) -> Result<NamespaceDeleteResult, Error> {
+        Self::validate_namespace_name(name)?;
+        match strategy {
+            "refuse" | "merge" | "deprecate" => {}
+            other => {
+                return Err(Error::Validation(format!(
+                    "Unknown delete strategy '{other}'. Expected: refuse, merge, deprecate"
+                )));
+            }
+        }
+        let (active, deprecated, total) = self.store.namespace_lifecycle_counts(name)?;
+        let no_op = |empty: bool| NamespaceDeleteResult {
+            name: name.to_string(),
+            strategy: strategy.to_string(),
+            affected: 0,
+            target: target.map(str::to_string),
+            empty,
+        };
+        if total == 0 {
+            // Namespace is empty / already gone — idempotent no-op.
+            return Ok(no_op(true));
+        }
+        match strategy {
+            "merge" => {
+                let target = target.ok_or_else(|| {
+                    Error::Validation("strategy=merge requires a 'target' namespace".to_string())
+                })?;
+                Self::validate_namespace_name(target)?;
+                if target == name {
+                    return Err(Error::Validation(
+                        "Merge target must differ from the deleted namespace".to_string(),
+                    ));
+                }
+                let moved =
+                    self.store
+                        .rename_namespace(name, target, &chrono::Utc::now().to_rfc3339())?;
+                self.recall_cache.invalidate_namespace(name);
+                self.recall_cache.invalidate_namespace(target);
+                tracing::info!(
+                    "Namespace delete (merge): '{name}' -> '{target}' moved {moved} memories"
+                );
+                Ok(NamespaceDeleteResult {
+                    name: name.to_string(),
+                    strategy: strategy.to_string(),
+                    affected: moved,
+                    target: Some(target.to_string()),
+                    empty: true,
+                })
+            }
+            "deprecate" => {
+                let reason = format!("namespace delete (strategy=deprecate) of '{name}' (#1181)");
+                let affected = self.store.deprecate_by_namespace(name, &reason)?;
+                let ids = self.store.namespace_ids(name)?;
+                let mut index = self
+                    .index
+                    .write()
+                    .map_err(|_| Error::lock("index write lock during delete_namespace"))?;
+                for id in &ids {
+                    index.remove(id);
+                }
+                persist_index_after_delete(&mut index, "delete_namespace (deprecate)")?;
+                self.recall_cache.invalidate_namespace(name);
+                tracing::info!(
+                    "Namespace delete (deprecate): '{name}' soft-deleted {affected} memories \
+                     ({deprecated} were already deprecated)"
+                );
+                Ok(NamespaceDeleteResult {
+                    name: name.to_string(),
+                    strategy: strategy.to_string(),
+                    affected,
+                    target: None,
+                    // The name survives as a deprecated-only ghost listing.
+                    empty: false,
+                })
+            }
+            // `refuse` — validated above; total > 0 always refuses.
+            _ => Err(Error::Validation(format!(
+                "Namespace '{name}' still holds {total} memory(ies) \
+                 ({active} active, {deprecated} deprecated); refusing to delete. \
+                 Use strategy=merge (with target) or strategy=deprecate."
+            ))),
+        }
+    }
+
+    /// Shared namespace name validation (#1181).
+    fn validate_namespace_name(name: &str) -> Result<(), Error> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(Error::Validation(
+                "Namespace name must not be empty".to_string(),
+            ));
+        }
+        if trimmed.len() > 128 {
+            return Err(Error::Validation(format!(
+                "Namespace name too long ({} > 128 chars)",
+                trimmed.len()
+            )));
+        }
+        Ok(())
+    }
+
     /// List all tags with their usage counts.
     pub fn tags_with_counts(&self, namespace: Option<&str>) -> Result<Vec<TagInfo>, Error> {
         self.store.tags_with_counts(namespace)
@@ -1500,7 +1835,7 @@ impl crate::Uteke {
 
         loop {
             let fetch_limit = (limit * multiplier).max(50);
-            let candidates = self.recall(
+            let candidates = self.recall_inner(
                 query,
                 fetch_limit,
                 tags_filter,
@@ -1508,34 +1843,13 @@ impl crate::Uteke {
                 min_score,
                 entity_filter,
                 category_filter,
+                true,
             )?;
             let candidates_len = candidates.len();
 
             let mut results: Vec<SearchResult> = candidates
                 .into_iter()
-                .filter(|r| {
-                    // Memory must have existed at this time
-                    if r.memory.created_at > point_in_time {
-                        return false;
-                    }
-                    // Memory must not have been invalidated before this time
-                    if let Some(valid_until) = r.memory.valid_until {
-                        if valid_until <= point_in_time {
-                            return false;
-                        }
-                    }
-                    // Memory should not be deprecated
-                    if r.memory.deprecated {
-                        return false;
-                    }
-                    // valid_from should be before point_in_time (if set)
-                    if let Some(valid_from) = r.memory.valid_from {
-                        if valid_from > point_in_time {
-                            return false;
-                        }
-                    }
-                    true
-                })
+                .filter(|r| memory_existed_at(&r.memory, point_in_time))
                 .collect();
 
             // Stop if we have enough results or exhausted retry budget.
@@ -1696,11 +2010,530 @@ mod forget_tests {
         let mem2 = uteke.get_by_id(&id2).unwrap().unwrap();
         assert!(!mem2.deprecated, "new memory should be active");
     }
+
+    /// #1047: after soft-forget, the deprecated row must vanish from list(),
+    /// load_all(), and the doctor/verify count — otherwise list shows ghosts
+    /// and doctor reports DB/Index mismatch forever.
+    #[test]
+    fn test_soft_forget_hides_from_list_and_doctor() {
+        // Isolated temp-dir store: ":memory:" stores still resolve the vector
+        // index to a file in the CWD, which cross-contaminates parallel runs.
+        let dir = std::env::temp_dir().join(format!("ghost-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
+        let embedding = vec![0.7_f32; 768];
+        let id = uteke
+            .remember_precomputed(
+                "ghost row after soft forget",
+                &[],
+                None,
+                Some("ghost-test"),
+                "fact",
+                "text",
+                &embedding,
+            )
+            .unwrap();
+
+        uteke.forget(&id).unwrap();
+
+        // list() must not return the deprecated row
+        let listed = uteke.list(None, 100, 0, Some("ghost-test")).unwrap();
+        assert!(
+            listed.iter().all(|m| m.id != id),
+            "deprecated row must not appear in list()"
+        );
+
+        // store-level list filter
+        let rows = uteke.store.list(None, Some("ghost-test"), 100, 0).unwrap();
+        assert!(rows.iter().all(|m| m.id != id));
+
+        // load_all() (repair/verify source) must exclude it
+        let all = uteke.store.load_all(Some("ghost-test")).unwrap();
+        assert!(all.iter().all(|m| m.id != id));
+
+        // doctor: DB count (active-only now) must equal index count
+        let report = uteke.doctor().unwrap();
+        let consistency = report
+            .checks
+            .iter()
+            .find(|c| c.name == "Index consistency")
+            .expect("doctor reports index consistency");
+        assert!(
+            !consistency.detail.contains("MISMATCH"),
+            "doctor must not report mismatch after soft-forget, got: {}",
+            consistency.detail
+        );
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod recall_cache_parity_tests {
+    use crate::RecallStrategy;
+    use crate::Uteke;
+
+    /// #1037: cold (cache miss) and warm (cache hit) recall_hybrid calls must
+    /// return identical scores. The cache-hit path used to skip salience/
+    /// recency boosts, so warm results scored lower than cold results.
+    #[test]
+    fn test_recall_hybrid_cold_warm_score_parity() {
+        let dir = std::env::temp_dir().join(format!("parity-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
+
+        // Non-noop boosts (default config is 0.1/0.1 — already non-noop, but be explicit)
+        uteke.set_salience_recency_config(crate::salience_recency::SalienceRecencyConfig {
+            salience_weight: 0.1,
+            recency_weight: 0.1,
+        });
+
+        let embedding = vec![0.42_f32; 768];
+        for i in 0..3 {
+            uteke
+                .remember_precomputed(
+                    &format!("parity probe memory number {i} about pod scheduling cluster"),
+                    &[],
+                    None,
+                    Some("parity-ns"),
+                    "fact",
+                    "text",
+                    &embedding,
+                )
+                .unwrap();
+        }
+
+        let ns = Some("parity-ns");
+        let cold = uteke
+            .recall_hybrid(
+                "pod scheduling cluster",
+                10,
+                None,
+                ns,
+                RecallStrategy::Hybrid,
+                0.0,
+            )
+            .unwrap();
+        assert!(!cold.is_empty(), "cold call must return results");
+
+        let warm = uteke
+            .recall_hybrid(
+                "pod scheduling cluster",
+                10,
+                None,
+                ns,
+                RecallStrategy::Hybrid,
+                0.0,
+            )
+            .unwrap();
+        assert_eq!(cold.len(), warm.len(), "warm call must return same count");
+
+        let max_delta = cold
+            .iter()
+            .zip(warm.iter())
+            .map(|(c, w)| (c.score - w.score).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            max_delta < 0.001,
+            "cold vs warm scores must match (max delta {max_delta}); cold={:?} warm={:?}",
+            cold.iter().map(|r| r.score).collect::<Vec<_>>(),
+            warm.iter().map(|r| r.score).collect::<Vec<_>>(),
+        );
+
+        // Cold scores must actually be boosted (not raw 1.0-RRF plateaus only):
+        // sanity — identical ids, same order
+        for (c, w) in cold.iter().zip(warm.iter()) {
+            assert_eq!(c.memory.id, w.memory.id);
+        }
+
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// #1037 (noop case): with boosts disabled, warm cache hits must still
+    /// respect `limit` even though the cache stores a boost_window-sized set.
+    #[test]
+    fn test_recall_hybrid_noop_respects_limit_on_warm() {
+        let dir = std::env::temp_dir().join(format!("parity-n-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
+        uteke.set_salience_recency_config(crate::salience_recency::SalienceRecencyConfig {
+            salience_weight: 0.0,
+            recency_weight: 0.0,
+        });
+        let embedding = vec![0.11_f32; 768];
+        for i in 0..20 {
+            uteke
+                .remember_precomputed(
+                    &format!("noop limit probe {i} alpha beta"),
+                    &[],
+                    None,
+                    Some("noop-ns"),
+                    "fact",
+                    "text",
+                    &embedding,
+                )
+                .unwrap();
+        }
+        let ns = Some("noop-ns");
+        let cold = uteke
+            .recall_hybrid("alpha beta", 3, None, ns, RecallStrategy::Hybrid, 0.0)
+            .unwrap();
+        let warm = uteke
+            .recall_hybrid("alpha beta", 3, None, ns, RecallStrategy::Hybrid, 0.0)
+            .unwrap();
+        assert!(cold.len() <= 3, "cold ≤ limit, got {}", cold.len());
+        assert!(
+            warm.len() <= 3,
+            "warm ≤ limit even with noop boosts + window cache, got {}",
+            warm.len()
+        );
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// #1037 (cora finding): boosts can lift a memory from outside the raw
+    /// top-N into the boosted top-N. The cached candidate set must therefore
+    /// be wider than `limit` (boost window), else warm calls could never
+    /// surface the boosted-in memory even though cold calls do.
+    #[test]
+    fn test_recall_hybrid_boost_reorder_across_limit() {
+        let dir = std::env::temp_dir().join(format!("parity-r-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
+        uteke.set_salience_recency_config(crate::salience_recency::SalienceRecencyConfig {
+            salience_weight: 0.4,
+            recency_weight: 0.4,
+        });
+
+        // Strong boosts: heavy access_count on the LAST raw-scored memory
+        // so boosts should lift it into the top-N.
+        let embedding = vec![0.42_f32; 768];
+        for i in 0..6 {
+            let id = uteke
+                .remember_precomputed(
+                    &format!("reorder probe {i} queue scheduling topic"),
+                    &[],
+                    None,
+                    Some("reorder-ns"),
+                    "fact",
+                    "text",
+                    &embedding,
+                )
+                .unwrap();
+            if i == 5 {
+                // Simulate heavy access: last_accessed=now, access_count high
+                // via direct store touch (recall path touches, but we want it
+                // ranked dead-last raw yet boosted-top after boosts).
+                uteke.store.touch_access_batch(&[id.as_str()]).unwrap_or(());
+                for _ in 0..20 {
+                    uteke.store.touch_access_batch(&[id.as_str()]).unwrap_or(());
+                }
+            }
+        }
+
+        let ns = Some("reorder-ns");
+        let cold = uteke
+            .recall_hybrid(
+                "queue scheduling topic",
+                3,
+                None,
+                ns,
+                RecallStrategy::Hybrid,
+                0.0,
+            )
+            .unwrap();
+        let warm = uteke
+            .recall_hybrid(
+                "queue scheduling topic",
+                3,
+                None,
+                ns,
+                RecallStrategy::Hybrid,
+                0.0,
+            )
+            .unwrap();
+
+        assert_eq!(cold.len(), warm.len(), "same count cold vs warm");
+        for (c, w) in cold.iter().zip(warm.iter()) {
+            assert_eq!(c.memory.id, w.memory.id, "same ids in same order");
+        }
+
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// Fusion weights benchmark-tuned on LongMemEval fast50 (#1123):
+/// plateau [1.7, 1.9] → R@5 0.98; 1.7 chosen mid-plateau.
+/// k=60 matches the k used by recall_rrf.
+pub(crate) const FUSION_W_VECTOR: f64 = 1.7;
+pub(crate) const FUSION_W_HYBRID: f64 = 1.0;
+pub(crate) const FUSION_RRF_K: f64 = 60.0;
+
+/// Weighted RRF fuse of two complete SearchResult rankings (#1123).
+///
+/// Deduplicates by memory id (first occurrence keeps the Memory payload),
+/// sorts by fused score descending, and rewrites each result's score to the
+/// fused RRF score. No truncation — the caller truncates to its window.
+/// `pub(crate)` for the #1160 explanation path, which replays the same fuse.
+pub(crate) fn rrf_fuse_weighted(
+    primary: Vec<SearchResult>,
+    secondary: Vec<SearchResult>,
+    w_primary: f64,
+    w_secondary: f64,
+) -> Vec<SearchResult> {
+    use std::collections::HashMap;
+    let mut scores: HashMap<String, f64> = HashMap::new();
+    for (rank, r) in primary.iter().enumerate() {
+        *scores.entry(r.memory.id.clone()).or_default() +=
+            w_primary / (FUSION_RRF_K + rank as f64 + 1.0);
+    }
+    for (rank, r) in secondary.iter().enumerate() {
+        *scores.entry(r.memory.id.clone()).or_default() +=
+            w_secondary / (FUSION_RRF_K + rank as f64 + 1.0);
+    }
+
+    // Chain both rankings, dedup by id (first occurrence wins the payload),
+    // then stable-sort by fused score descending.
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<SearchResult> = primary
+        .into_iter()
+        .chain(secondary)
+        .filter(|r| seen.insert(r.memory.id.clone()))
+        .collect();
+    out.sort_by(|a, b| {
+        let sb = scores.get(&b.memory.id).copied().unwrap_or(0.0);
+        let sa = scores.get(&a.memory.id).copied().unwrap_or(0.0);
+        sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    for r in out.iter_mut() {
+        r.score = scores.get(&r.memory.id).copied().unwrap_or(0.0) as f32;
+    }
+    out
+}
+
+#[cfg(test)]
+mod rrf_fuse_weighted_tests {
+    use super::rrf_fuse_weighted;
+    use crate::memory::types::{Memory, SearchResult};
+
+    fn sr(id: &str, score: f32) -> SearchResult {
+        let now = chrono::Utc::now();
+        let memory = Memory {
+            id: id.to_string(),
+            content: format!("content {id}"),
+            embedding: vec![0.1_f32; 4],
+            tags: vec![],
+            metadata: serde_json::Value::Null,
+            created_at: now,
+            updated_at: now,
+            namespace: "test".to_string(),
+            access_count: 0,
+            last_accessed: None,
+            deprecated: false,
+            deprecated_at: None,
+            valid_from: Some(now),
+            valid_until: None,
+            memory_type: "note".to_string(),
+            importance: 0.5,
+            pinned: false,
+            content_type: "text".to_string(),
+            slug: None,
+            source: None,
+            source_type: "user".to_string(),
+            author_type: "agent".to_string(),
+        };
+        SearchResult { memory, score }
+    }
+
+    #[test]
+    fn overlap_wins_and_ids_dedup() {
+        // 'both' appears in BOTH rankings; 'gold' only in secondary.
+        let primary = vec![sr("a", 0.9), sr("b", 0.8), sr("both", 0.7)];
+        let secondary = vec![sr("gold", 0.95), sr("both", 0.85), sr("c", 0.6)];
+        let fused = rrf_fuse_weighted(primary, secondary, 1.7, 1.0);
+        // 'both' ranks 3rd primary + 2nd secondary → highest fused score.
+        assert_eq!(fused[0].memory.id, "both");
+        // No duplicate ids survive.
+        let n = fused.len();
+        let uniq = fused
+            .iter()
+            .map(|r| r.memory.id.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        assert_eq!(n, uniq);
+        // Scores are fused RRF scores (small positive), not the originals.
+        assert!(fused[0].score > 0.0 && fused[0].score < 0.1);
+    }
+
+    #[test]
+    fn primary_weight_orders_disagreeing_rankings() {
+        let primary = vec![sr("x", 0.9), sr("y", 0.8)];
+        let secondary = vec![sr("y", 0.95), sr("x", 0.85)];
+        // x: 1st primary + 2nd secondary; y: mirrored. Higher primary weight
+        // must lift x; higher secondary weight must lift y.
+        let f1 = rrf_fuse_weighted(primary.clone(), secondary.clone(), 2.0, 1.0);
+        assert_eq!(f1[0].memory.id, "x");
+        let f2 = rrf_fuse_weighted(primary, secondary, 0.5, 2.0);
+        assert_eq!(f2[0].memory.id, "y");
+    }
+
+    #[test]
+    fn empty_inputs_yield_empty() {
+        let fused = rrf_fuse_weighted(vec![], vec![], 1.7, 1.0);
+        assert!(fused.is_empty());
+        let fused = rrf_fuse_weighted(vec![sr("only", 0.9)], vec![], 1.7, 1.0);
+        assert_eq!(fused.len(), 1);
+        assert_eq!(fused[0].memory.id, "only");
+    }
+}
+
+#[cfg(test)]
+mod fusion_strategy_tests {
+    use crate::Uteke;
+    use crate::memory::types::RecallStrategy;
+
+    /// #1123: Fusion strategy end-to-end — seeds a store, runs recall with
+    /// the explicit Fusion strategy, and asserts the on-topic memory surfaces
+    /// in the top results. Also asserts cold/warm parity through the cache.
+    #[test]
+    #[ignore = "requires ONNX embedder (model download) in CI"]
+    fn fusion_recall_finds_on_topic_memory() {
+        let dir = std::env::temp_dir().join(format!("fusion-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
+
+        let base = vec![0.1_f32; 768];
+        // On-topic memory: near-parallel to the probe direction.
+        let mut on_topic = base.clone();
+        for v in on_topic.iter_mut().take(384) {
+            *v = 0.9;
+        }
+        // Off-topic memories: anti-parallel.
+        let mut off = base.clone();
+        for v in off.iter_mut().take(384) {
+            *v = -0.9;
+        }
+
+        uteke
+            .remember_precomputed(
+                "quarterly revenue projections for the board meeting",
+                &["finance"],
+                None,
+                Some("fusion-ns"),
+                "fact",
+                "text",
+                &on_topic,
+            )
+            .unwrap();
+        for i in 0..4 {
+            uteke
+                .remember_precomputed(
+                    &format!("unrelated filler note {i} about gardening"),
+                    &["misc"],
+                    None,
+                    Some("fusion-ns"),
+                    "note",
+                    "text",
+                    &off,
+                )
+                .unwrap();
+        }
+
+        let ns = Some("fusion-ns");
+        let cold = uteke
+            .recall_hybrid(
+                "board meeting revenue projections",
+                3,
+                None,
+                ns,
+                RecallStrategy::Fusion,
+                0.0,
+            )
+            .unwrap();
+        assert!(!cold.is_empty(), "fusion must return results");
+        assert_eq!(
+            cold[0].memory.content, "quarterly revenue projections for the board meeting",
+            "on-topic memory must rank first under fusion"
+        );
+        assert!(cold.len() <= 3);
+
+        // Cold/warm parity through the recall cache (#1037 invariant).
+        let warm = uteke
+            .recall_hybrid(
+                "board meeting revenue projections",
+                3,
+                None,
+                ns,
+                RecallStrategy::Fusion,
+                0.0,
+            )
+            .unwrap();
+        let cold_ids: Vec<_> = cold.iter().map(|r| r.memory.id.clone()).collect();
+        let warm_ids: Vec<_> = warm.iter().map(|r| r.memory.id.clone()).collect();
+        assert_eq!(cold_ids, warm_ids, "cold and warm fusion must match");
+
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Fusion must not silently degrade: an explicit Fusion call on an empty
+    /// store returns empty results (both sub-rankings empty), NOT an error
+    /// and NOT a fallback ranking.
+    #[test]
+    #[ignore = "requires ONNX embedder (model download) in CI"]
+    fn fusion_recall_empty_store_returns_empty() {
+        let dir = std::env::temp_dir().join(format!("fusion-e-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let uteke = Uteke::open(dir.join("t.db").to_str().unwrap()).unwrap();
+        let res = uteke
+            .recall_hybrid(
+                "anything",
+                5,
+                None,
+                Some("empty-ns"),
+                RecallStrategy::Fusion,
+                0.0,
+            )
+            .unwrap();
+        assert!(res.is_empty());
+        drop(uteke);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
 
 #[cfg(test)]
 mod dedup_tests {
+    use super::memory_existed_at;
     use crate::Uteke;
+
+    fn probe_memory(created: chrono::DateTime<chrono::Utc>) -> crate::memory::types::Memory {
+        crate::memory::types::Memory {
+            id: "probe-1086".to_string(),
+            content: "temporal deprecation probe alpha".to_string(),
+            embedding: vec![],
+            tags: vec![],
+            metadata: serde_json::json!({}),
+            created_at: created,
+            updated_at: created,
+            namespace: crate::memory::types::DEFAULT_NAMESPACE.to_string(),
+            access_count: 0,
+            last_accessed: None,
+            deprecated: false,
+            deprecated_at: None,
+            valid_from: Some(created),
+            valid_until: None,
+            memory_type: "fact".to_string(),
+            importance: 0.5,
+            pinned: false,
+            content_type: "text".to_string(),
+            slug: None,
+            source: None,
+            source_type: "direct".to_string(),
+            author_type: "agent".to_string(),
+        }
+    }
 
     #[test]
     #[ignore = "requires ONNX embedder (model download) in CI"]
@@ -1775,5 +2608,253 @@ mod dedup_tests {
             .expect("metadata should be object");
         assert_eq!(obj.get("entity").unwrap(), "test-app");
         assert_eq!(obj.get("category").unwrap(), "integration");
+    }
+
+    /// #1086: a memory deprecated AFTER the point-in-time must still appear in
+    /// time-travel recall; one deprecated BEFORE it must not.
+    #[test]
+    fn test_recall_at_time_deprecated_after_pit() {
+        let past = chrono::Utc::now() - chrono::Duration::hours(2);
+        let now = chrono::Utc::now();
+
+        // Deprecated after `past` -> existed at `past`.
+        let mut m = probe_memory(past);
+        m.deprecated = true;
+        m.deprecated_at = Some(now);
+        assert!(memory_existed_at(&m, past));
+        assert!(!memory_existed_at(&m, now));
+    }
+}
+
+/// Temporal predicate shared by `recall_at_time` (core) and
+/// `memory_exists_at` (server): did this memory exist at `pit`?
+/// Deprecated-before-pit excludes; deprecated-after-pit includes (#1086).
+pub fn memory_existed_at(
+    m: &crate::memory::types::Memory,
+    pit: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if m.created_at > pit {
+        return false;
+    }
+    if let Some(valid_until) = m.valid_until {
+        if valid_until <= pit {
+            return false;
+        }
+    }
+    if m.deprecated {
+        match m.deprecated_at {
+            Some(dep_at) if dep_at <= pit => return false,
+            _ => {}
+        }
+    }
+    if let Some(valid_from) = m.valid_from {
+        if valid_from > pit {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod namespace_management_tests {
+    use crate::Uteke;
+
+    /// #1181: move_memory updates the namespace column and both the old and
+    /// the new namespace disappear/appear correctly in listings.
+    #[test]
+    fn move_memory_updates_namespace() {
+        let u = Uteke::open_with_backend(":memory:", None).expect("open without embedder");
+        let id = u
+            .remember("move me", &[], None, Some("alpha"))
+            .expect("remember");
+
+        let moved = u.move_memory(&id, "beta").expect("move");
+        assert!(moved);
+        let mem = u.get_by_id(&id).expect("get").expect("exists");
+        assert_eq!(mem.namespace, "beta");
+
+        let listings = u.list_namespaces().expect("list");
+        assert!(
+            !listings.contains(&"alpha".to_string()),
+            "old name vanishes"
+        );
+        assert!(listings.contains(&"beta".to_string()));
+
+        // Unknown ID → Ok(false), not an error.
+        let missing = u.move_memory("00000000-0000-4000-8000-000000000000", "beta");
+        assert!(matches!(missing, Ok(false)));
+    }
+
+    /// #1181: rename moves all memories; renaming onto an existing namespace
+    /// merges and reports `target_existed = true`.
+    #[test]
+    fn rename_namespace_moves_and_merges() {
+        let u = Uteke::open_with_backend(":memory:", None).expect("open without embedder");
+        u.remember("a one", &[], None, Some("old")).expect("a1");
+        u.remember("a two", &[], None, Some("old")).expect("a2");
+        u.remember("b one", &[], None, Some("new")).expect("b1");
+
+        // Merge path: target exists.
+        let merge = u.rename_namespace("old", "new").expect("merge");
+        assert!(merge.target_existed);
+        assert_eq!(merge.moved, 2);
+        assert_eq!(merge.from, "old");
+        assert_eq!(merge.to, "new");
+
+        let listings = u.list_namespaces().expect("list");
+        assert!(!listings.contains(&"old".to_string()));
+        assert!(listings.contains(&"new".to_string()));
+
+        // Plain rename path: target does not exist.
+        u.remember("c one", &[], None, Some("temp")).expect("c1");
+        let plain = u.rename_namespace("temp", "final").expect("rename");
+        assert!(!plain.target_existed);
+        assert_eq!(plain.moved, 1);
+
+        // Same-name rename is rejected.
+        assert!(u.rename_namespace("final", "final").is_err());
+        // Unknown source namespace is rejected.
+        assert!(u.rename_namespace("ghost", "anywhere").is_err());
+    }
+
+    /// #1181: delete strategies — refuse (default) blocks while memories
+    /// remain; merge moves everything away; deprecate soft-deletes without
+    /// hard-deleting anything.
+    #[test]
+    fn delete_namespace_strategies() {
+        let u = Uteke::open_with_backend(":memory:", None).expect("open without embedder");
+        let id1 = u.remember("d one", &[], None, Some("temp-ns")).expect("d1");
+        let id2 = u.remember("d two", &[], None, Some("temp-ns")).expect("d2");
+
+        // refuse (default): blocked while memories exist.
+        let refused = u.delete_namespace("temp-ns", "refuse", None);
+        assert!(refused.is_err(), "refuse must block a non-empty namespace");
+
+        // merge: moves all memories into the target, name disappears.
+        let merged = u
+            .delete_namespace("temp-ns", "merge", Some("archive"))
+            .expect("merge delete");
+        assert_eq!(merged.strategy, "merge");
+        assert_eq!(merged.affected, 2);
+        assert_eq!(merged.target.as_deref(), Some("archive"));
+        assert!(merged.empty);
+        let listings = u.list_namespaces().expect("list");
+        assert!(!listings.contains(&"temp-ns".to_string()));
+        assert!(u.get_by_id(&id1).expect("get").expect("survives").namespace == "archive");
+
+        // deprecate: soft-delete only, no hard delete; the name remains as a
+        // deprecated-only ghost with honest lifecycle counts.
+        let dep1 = u
+            .remember("e one", &[], None, Some("ghost-ns"))
+            .expect("e1");
+        let dep = u
+            .delete_namespace("ghost-ns", "deprecate", None)
+            .expect("deprecate delete");
+        assert_eq!(dep.strategy, "deprecate");
+        assert_eq!(dep.affected, 1);
+        assert!(!dep.empty);
+        let mem = u.get_by_id(&dep1).expect("get").expect("still stored");
+        assert!(mem.deprecated, "memory must be soft-deleted, not removed");
+        let lifecycle = u
+            .list_namespaces_with_lifecycle_counts()
+            .expect("lifecycle counts");
+        let ghost = lifecycle
+            .iter()
+            .find(|(name, _, _)| name == "ghost-ns")
+            .expect("ghost namespace stays listed");
+        assert_eq!((ghost.1, ghost.2), (0, 1), "0 active / 1 deprecated");
+        assert!(
+            u.get_by_id(&id2).is_ok(),
+            "nothing from the earlier merge path was lost"
+        );
+
+        // Unknown strategy is rejected.
+        assert!(u.delete_namespace("ghost-ns", "hard-delete", None).is_err());
+    }
+
+    /// #1172 Fase 1: remember records a SHA-256 source hash; provenance()
+    /// returns the full chain (fields + tier + timeline) and detects content
+    /// modified after write via hash mismatch.
+    #[test]
+    fn provenance_chain_and_source_hash() {
+        use sha2::Digest;
+
+        let u = Uteke::open_with_backend(":memory:", None).expect("open without embedder");
+        let id = u
+            .remember("the deploy window is 09:00 WIB", &[], None, Some("ops"))
+            .expect("remember");
+
+        let report = u.provenance(&id).expect("provenance").expect("exists");
+        assert_eq!(report.id, id);
+        assert_eq!(report.namespace, "ops");
+        assert_eq!(report.author_type, "agent");
+        // Hash at write time must match a live recomputation.
+        let expected: String = sha2::Sha256::digest(report.content.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(report.source_hash.as_deref(), Some(expected.as_str()));
+        assert_eq!(report.content_hash_now, expected);
+        assert!(!report.events.is_empty(), "Created event must be recorded");
+        assert!(report.events.iter().any(|e| e.event_type == "created"));
+
+        // Update content without touching source_hash → mismatch detected
+        // (this is the tamper-evidence property).
+        u.store
+            .conn
+            .execute(
+                "UPDATE memories SET content = 'tampered' WHERE id = ?1",
+                rusqlite::params![id],
+            )
+            .expect("tamper");
+        let after = u.provenance(&id).expect("provenance").expect("exists");
+        assert_eq!(after.content, "tampered");
+        assert_ne!(
+            after.source_hash.as_deref(),
+            Some(after.content_hash_now.as_str()),
+            "post-write modification must break the hash match"
+        );
+
+        // Unknown ID → Ok(None).
+        assert!(
+            u.provenance("00000000-0000-4000-8000-000000000000")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// #1172 Fase 1: timeline events carry actor + evidence when written via
+    /// the provenance-aware API, and old callers (no provenance) stay working.
+    #[test]
+    fn timeline_events_carry_provenance() {
+        let u = Uteke::open_with_backend(":memory:", None).expect("open without embedder");
+        let id = u
+            .remember("evidence chain probe", &[], None, None)
+            .expect("remember");
+
+        u.store
+            .add_timeline_event_with_provenance(
+                &id,
+                crate::timeline::TimelineEventType::Updated,
+                Some(&serde_json::json!({"field": "importance"})),
+                Some("agent:cto"),
+                Some(&serde_json::json!([{"memory": "other-id", "score": 0.82}])),
+            )
+            .expect("append provenance event");
+
+        let events = u.timeline(&id, 0).expect("timeline");
+        assert_eq!(events.len(), 2, "created + updated");
+        let provenance_event = events
+            .iter()
+            .find(|e| e.event_type == "updated")
+            .expect("updated event");
+        assert_eq!(provenance_event.actor.as_deref(), Some("agent:cto"));
+        let evidence = provenance_event.evidence.as_ref().expect("evidence");
+        assert_eq!(evidence[0]["memory"], serde_json::json!("other-id"));
+
+        // Plain events (Created) have no actor — backward compatible shape.
+        let created = events.iter().find(|e| e.event_type == "created").unwrap();
+        assert!(created.actor.is_none());
+        assert!(created.evidence.is_none());
     }
 }

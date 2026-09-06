@@ -231,7 +231,7 @@ fn init_pi_memory_provider(json: bool) -> Result<(), String> {
     std::fs::create_dir_all(&ext_dir)
         .map_err(|e| format!("Failed to create extension dir: {e}"))?;
 
-    // Templates embedded from assets/pi-memory-provider/ at build time.
+    // Templates embedded from extensions/pi-memory-provider/ at build time.
     let index_ts = include_str!("../assets/pi-memory-provider/index.ts");
     let package_json = include_str!("../assets/pi-memory-provider/package.json");
 
@@ -364,7 +364,7 @@ fn init_cursor_memory_provider(json: bool) -> Result<(), String> {
 
     let rules_content = r#"---
 description: Uteke auto-memory — recall before every task, store after decisions
-globs: 
+globs:
 alwaysApply: true
 ---
 
@@ -630,7 +630,11 @@ fn init_hermes(json: bool) -> Result<(), String> {
 ///   via the opt-in `import --extract` path,
 /// - it talks to the `uteke` binary directly (no `uteke-serve` daemon).
 ///
+<<<<<<< HEAD
 /// Templates live in `assets/hermes-memory-provider/` and are embedded at
+=======
+/// Templates live in `extensions/hermes-uteke-memory/` and are embedded at
+>>>>>>> a2ec81a0915a242cee6e1de8811491e4fad1d4da
 /// build time so the generated plugin always matches the installed binary.
 fn init_hermes_memory_provider(json: bool) -> Result<(), String> {
     // Install to ~/.hermes/plugins/uteke/ (memory providers are keyed by name).
@@ -651,9 +655,9 @@ fn init_hermes_memory_provider(json: bool) -> Result<(), String> {
     std::fs::create_dir_all(&plugin_dir)
         .map_err(|e| format!("Failed to create plugin dir: {e}"))?;
 
-    // Templates embedded from assets/hermes-memory-provider/ at build time.
-    let init_py = include_str!("../assets/hermes-memory-provider/__init__.py.tmpl");
-    let plugin_yaml = include_str!("../assets/hermes-memory-provider/plugin.yaml.tmpl");
+    // Templates embedded from extensions/hermes-uteke-memory/ at build time.
+    let init_py = include_str!("../assets/hermes-uteke-memory/__init__.py.tmpl");
+    let plugin_yaml = include_str!("../assets/hermes-uteke-memory/plugin.yaml.tmpl");
 
     std::fs::write(plugin_dir.join("__init__.py"), init_py)
         .map_err(|e| format!("Failed to write __init__.py: {e}"))?;
@@ -695,8 +699,8 @@ fn init_hermes_memory_provider(json: bool) -> Result<(), String> {
 mod tests {
     /// The Hermes memory-provider templates are embedded at build time. Guard
     /// against them going missing or losing their entry points.
-    const INIT_PY: &str = include_str!("../assets/hermes-memory-provider/__init__.py.tmpl");
-    const PLUGIN_YAML: &str = include_str!("../assets/hermes-memory-provider/plugin.yaml.tmpl");
+    const INIT_PY: &str = include_str!("../assets/hermes-uteke-memory/__init__.py.tmpl");
+    const PLUGIN_YAML: &str = include_str!("../assets/hermes-uteke-memory/plugin.yaml.tmpl");
 
     #[test]
     fn memory_provider_template_has_register_entrypoint() {

@@ -2,6 +2,7 @@
 
 mod aging;
 pub(crate) mod bench;
+mod contradictions;
 mod doc;
 mod dream;
 mod edges;
@@ -44,6 +45,7 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
             detect_contradiction,
             entity,
             category,
+            author_type,
             meta,
             room,
             author,
@@ -59,6 +61,7 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
             *detect_contradiction,
             entity.as_deref(),
             category.as_deref(),
+            author_type.as_deref(),
             meta,
             room.as_deref(),
             author.as_deref(),
@@ -85,6 +88,7 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
             r#where,
             r#type,
             enrich,
+            explain,
         } => recall::run_recall(
             cli,
             uteke,
@@ -108,6 +112,7 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
             *recency,
             r#type.as_deref(),
             *enrich,
+            *explain,
         ),
 
         Commands::Context { namespace } => {
@@ -192,7 +197,7 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
 
         Commands::Lifecycle { command } => lifecycle::run(cli, uteke, ns, command),
 
-        Commands::Export { output } => maintenance::run_export(cli, uteke, ns, output),
+        Commands::Export { output, full } => maintenance::run_export(cli, uteke, ns, output, *full),
 
         Commands::Import {
             input,
@@ -393,6 +398,67 @@ pub(crate) fn run_command(cli: &Cli, uteke: &mut Uteke, config: &Config) -> Resu
         Commands::Orphans { threshold, limit } => orphans::run(cli, uteke, ns, *threshold, *limit),
 
         Commands::Timeline { id, limit } => timeline::run(cli, uteke, id, *limit),
+
+        Commands::Contradictions { command } => {
+            crate::commands::contradictions::run(cli, uteke, command)
+        }
+
+        Commands::Supersede { old, new, reason } => {
+            crate::commands::contradictions::supersede(cli, uteke, old, new, reason.as_deref())
+        }
+
+        Commands::Provenance { id } => {
+            let report = uteke
+                .provenance(id)
+                .map_err(|e| format!("Failed to read provenance: {e}"))?;
+            match report {
+                Some(report) if cli.json => crate::output::print_json(&report),
+                Some(report) => {
+                    println!("Provenance for memory {id}");
+                    println!("  Namespace:    {}", report.namespace);
+                    println!("  Author type:  {}", report.author_type);
+                    println!(
+                        "  Source:       {} ({})",
+                        report.source.as_deref().unwrap_or("—"),
+                        report.source_type
+                    );
+                    println!("  Trust tier:   {:?}", report.trust_tier);
+                    println!("  Created:      {}", report.created_at);
+                    println!("  Updated:      {}", report.updated_at);
+                    println!("  Deprecated:   {}", report.deprecated);
+                    match report.source_hash.as_deref() {
+                        Some(h) if h == report.content_hash_now => {
+                            println!("  Content hash: {h} ✓ (matches write-time hash)");
+                        }
+                        Some(h) => {
+                            println!(
+                                "  Content hash: {h} ✗ MISMATCH — content changed after write (now {})",
+                                report.content_hash_now
+                            );
+                        }
+                        None => {
+                            println!(
+                                "  Content hash: — (pre-v18 row; now {})",
+                                report.content_hash_now
+                            );
+                        }
+                    }
+                    println!("\n  Event chain ({} events):", report.events.len());
+                    for event in &report.events {
+                        let actor = event.actor.as_deref().unwrap_or("—");
+                        println!(
+                            "    • [{}] {} (actor: {actor})",
+                            event.created_at, event.event_type
+                        );
+                        if let Some(evidence) = &event.evidence {
+                            println!("      evidence: {evidence}");
+                        }
+                    }
+                }
+                None => return Err(format!("Memory not found: {id}")),
+            }
+            Ok(())
+        }
 
         Commands::Doc { command } => crate::commands::doc::run(cli, uteke, command, config),
 

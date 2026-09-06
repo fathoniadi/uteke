@@ -160,14 +160,22 @@ pub(crate) fn run(
                 return Err("Operation not confirmed".to_string());
             }
 
-            uteke
+            let unlinked = uteke
                 .delete_room(room_id)
                 .map_err(|e| format!("Failed to delete room: {e}"))?;
 
             if cli.json {
-                println!("{}", serde_json::json!({"deleted": room_id}));
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "deleted": room_id,
+                        "unlinked_memories": unlinked,
+                    })
+                );
             } else {
-                println!("Room {room_id} deleted. Memories are preserved in their namespaces.");
+                println!(
+                    "Room {room_id} deleted. {unlinked} memory link(s) removed; memories are preserved in their namespaces."
+                );
             }
             Ok(())
         }
@@ -326,6 +334,71 @@ pub(crate) fn run(
                 println!("Rooms referencing document '{doc_slug}':");
                 for room_id in &rooms {
                     println!("  • {room_id}");
+                }
+            }
+            Ok(())
+        }
+        RoomCommands::Consolidate {
+            room_id,
+            apply,
+            max_calls,
+        } => {
+            let dry = uteke_core::consolidation_api::plan_room(uteke, room_id)
+                .map_err(|e| format!("Failed to plan consolidation: {e}"))?;
+
+            if !apply {
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&dry).unwrap());
+                } else {
+                    println!("Consolidation plan for room '{room_id}' (dry-run, no LLM calls):");
+                    println!("  Memories: {}", dry.plan.total_memories);
+                    println!("  Batches:  {}", dry.plan.batches.len());
+                    println!(
+                        "  Estimated LLM calls: {}",
+                        dry.plan.batches.len().min(*max_calls)
+                    );
+                    if dry.plan.batches.len() > *max_calls {
+                        println!(
+                            "  ⚠ {} batches exceed --max-calls {max_calls}; run with higher --max-calls or in parts.",
+                            dry.plan.batches.len() - max_calls
+                        );
+                    }
+                    println!("  Pass --apply to execute.");
+                }
+                return Ok(());
+            }
+
+            // Apply: requires extraction LLM setup (shared with import --extract).
+            let ext = &config.extraction;
+            if ext.api_key.is_empty() {
+                return Err(
+                    "Consolidation --apply needs LLM config: set [extraction] in uteke.toml \
+                     or UTEKE_EXTRACTION_API_KEY (same setup as `import --extract`)."
+                        .to_string(),
+                );
+            }
+            let result =
+                uteke_core::consolidation_api::consolidate_room(uteke, room_id, ext, *max_calls)
+                    .map_err(|e| format!("Consolidation failed: {e}"))?;
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result).unwrap());
+            } else {
+                println!("Consolidation of room '{room_id}' complete:");
+                println!("  Batches processed: {}", result.batches_processed);
+                println!("  Records written:   {}", result.records_written);
+                println!("  Sources deprecated: {}", result.sources_deprecated);
+                if result.budget_skipped > 0 {
+                    println!("  Budget-skipped:    {}", result.budget_skipped);
+                }
+                if result.rejected_by_policy > 0 {
+                    println!("  Rejected (policy): {}", result.rejected_by_policy);
+                }
+                if !result.batch_errors.is_empty() {
+                    println!("  ⚠ Batch errors (isolated, run continued):");
+                    for e in &result.batch_errors {
+                        println!("    - {e}");
+                    }
                 }
             }
             Ok(())

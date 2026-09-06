@@ -46,14 +46,13 @@ pub(crate) fn run_repair(
     if rebuild {
         tracing::info!("Running repair --rebuild (deleting index files first)");
 
-        // Determine index path: cli --store override or config default.
-        let store_dir = cli
-            .store
-            .as_deref()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| crate::Config::expand_tilde(&config.store.path));
+        // Same resolution order as main (#1105): --store > UTEKE_HOME > config.
+        let store_dir = crate::resolve_store_path(cli, config);
 
-        let index_path = std::path::PathBuf::from(&store_dir).join("uteke_index.usearch");
+        let index_path = std::path::PathBuf::from(&store_dir).join(format!(
+            "uteke_index.{}",
+            uteke_core::memory::vector::INDEX_EXT
+        ));
         let keys_path = std::path::PathBuf::from(&store_dir).join("uteke_index.keys");
 
         // Delete both index files so the store opens cleanly.
@@ -74,7 +73,7 @@ pub(crate) fn run_repair(
     // --rebuild deletes the on-disk index above, so there's nothing to
     // add incrementally to — always full-rebuild in that case regardless
     // of --incremental.
-    let report = if incremental && !rebuild {
+    let mut report = if incremental && !rebuild {
         tracing::info!("Running repair --incremental (adding missing entries only)");
         uteke
             .repair_incremental()
@@ -82,18 +81,36 @@ pub(crate) fn run_repair(
     } else {
         uteke.repair().map_err(|e| format!("Repair failed: {e}"))?
     };
+
+    // Optional: re-embed memories with missing vectors.
+    // Runs BEFORE the Repair Report is printed so `index_after` and the
+    // "still differs" warning reflect the final state, not the intermediate
+    // rebuild that legitimately excludes NULL/empty-embedding rows (#1149).
+    let reembed_report = if reembed {
+        tracing::info!("Running repair --reembed (regenerating missing embeddings)");
+        match uteke.reembed_missing() {
+            Ok(r) => {
+                // Refresh the vector count to include newly appended vectors.
+                if let Ok(v) = uteke.verify() {
+                    report.index_after = v.index_count;
+                }
+                Some(Ok(r))
+            }
+            Err(e) => Some(Err(e)),
+        }
+    } else {
+        None
+    };
+
+    // Repair itself succeeded — always print its report (even if reembed failed).
     if cli.json {
         output::print_json(&report);
     } else {
         output::print_repair_human(&report);
     }
 
-    // Optional: re-embed memories with missing vectors.
-    if reembed {
-        tracing::info!("Running repair --reembed (regenerating missing embeddings)");
-        let reembed_report = uteke
-            .reembed_missing()
-            .map_err(|e| format!("Re-embed failed: {e}"))?;
+    if let Some(result) = reembed_report {
+        let reembed_report = result.map_err(|e| format!("Re-embed failed: {e}"))?;
         if cli.json {
             output::print_json(&reembed_report);
         } else {
@@ -200,7 +217,30 @@ pub(crate) fn run_export(
     uteke: &Uteke,
     ns: Option<&str>,
     output: &str,
+    full: bool,
 ) -> Result<(), String> {
+    if full {
+        tracing::info!("Exporting FULL store structure to {output}");
+        let ndjson = uteke
+            .export_full()
+            .map_err(|e| format!("Failed to export: {e}"))?;
+        if output == "-" {
+            println!("{ndjson}");
+        } else {
+            std::fs::write(output, &ndjson)
+                .map_err(|e| format!("Failed to write export file: {e}"))?;
+            let count = ndjson.lines().filter(|l| !l.trim().is_empty()).count() - 1; // minus manifest
+            if cli.json {
+                output::print_json(
+                    &serde_json::json!({"exported": count, "format": "structural-v1"}),
+                );
+            } else {
+                println!("\u{2713} Exported {count} structural rows (manifest + sections)");
+            }
+        }
+        return Ok(());
+    }
+
     tracing::info!("Exporting memories to {output}");
     let jsonl = uteke
         .export(ns)
@@ -257,6 +297,35 @@ pub(crate) fn run_import(
     } else {
         std::fs::read_to_string(input).map_err(|e| format!("Failed to read file: {e}"))?
     };
+
+    // Structural export detection (#1057): a manifest first line routes to
+    // the full-store restore; plain JSONL falls through to the legacy path.
+    let first_line = content.lines().find(|l| !l.trim().is_empty());
+    if let Some(fl) = first_line {
+        if fl.contains("\"uteke_export\"") {
+            tracing::info!("Detected structural export manifest — full-store import");
+            let result = uteke
+                .import_full(&content)
+                .map_err(|e| format!("Structural import failed: {e}"))?;
+            if cli.json {
+                output::print_json(&result);
+            } else {
+                println!("\u{2713} Structural import complete");
+                if let Some(imported) = result.get("imported").and_then(|v| v.as_object()) {
+                    for (section, count) in imported {
+                        println!("  {section}: {count}");
+                    }
+                }
+                if result["needs_reembed"].as_i64().unwrap_or(0) > 0 {
+                    println!(
+                        "\u{26a0}\u{fe0f}  {} memories need re-embedding — run `uteke repair --reembed`",
+                        result["needs_reembed"]
+                    );
+                }
+            }
+            return Ok(());
+        }
+    }
 
     // LLM extraction path (opt-in). Distill the raw input into atomic facts,
     // then store each fact as its own memory. Bypasses format detection because

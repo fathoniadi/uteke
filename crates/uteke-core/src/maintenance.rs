@@ -28,14 +28,14 @@ impl crate::Uteke {
             detail: format!("{} memories, {}", db_count, format_bytes(db_size)),
         });
 
-        // 2. usearch index
+        // 2. vector index (backend-aware label, #1112)
         let index = self
             .index
             .read()
             .map_err(|_| Error::lock("index read lock during doctor"))?;
         let index_count = index.len();
         checks.push(DoctorCheck {
-            name: "usearch index".to_string(),
+            name: format!("{} index", crate::memory::vector::INDEX_EXT),
             status: DoctorStatus::Ok,
             detail: format!("{} vectors", index_count),
         });
@@ -43,21 +43,28 @@ impl crate::Uteke {
         // 3. Index consistency — compare against embeddable rows only.
         // Some memories (e.g. doc_stub:true FK placeholders) never get an
         // embedding by design and would otherwise show as a permanent,
-        // unfixable "mismatch" against the raw total row count.
+        // unfixable "mismatch" against the raw total row count. The vector
+        // index also holds document chunk vectors ("chunk:<id>" keys), so
+        // include those on the DB side too (#1111).
         let embeddable_count = self.store.count_embeddable(None)?;
-        if embeddable_count == index_count {
+        let chunk_count = self.store.load_all_chunk_embeddings()?.len();
+        let expected = embeddable_count + chunk_count;
+        if expected == index_count {
             checks.push(DoctorCheck {
                 name: "Index consistency".to_string(),
                 status: DoctorStatus::Ok,
-                detail: format!("DB={} Index={}", embeddable_count, index_count),
+                detail: format!(
+                    "DB={} (+{} chunks) Index={}",
+                    embeddable_count, chunk_count, index_count
+                ),
             });
         } else {
             checks.push(DoctorCheck {
                 name: "Index consistency".to_string(),
                 status: DoctorStatus::Error,
                 detail: format!(
-                    "MISMATCH: DB={} Index={} — run `uteke repair`",
-                    embeddable_count, index_count
+                    "MISMATCH: DB={} (+{} chunks) Index={} — run `uteke repair`",
+                    embeddable_count, chunk_count, index_count
                 ),
             });
         }
@@ -244,15 +251,19 @@ impl crate::Uteke {
         // Embeddable count, not raw total — see count_embeddable() doc
         // comment (doc_stub:true FK placeholders never get an embedding).
         let db_count = self.store.count_embeddable(None)?;
+        // Chunk vectors share the index ("chunk:<id>" keys) — include them on
+        // the DB side so stores with documents don't report false MISMATCH (#1111).
+        let chunk_count = self.store.load_all_chunk_embeddings()?.len();
         let index = self
             .index
             .read()
             .map_err(|_| Error::lock("index read lock during verify"))?;
         let index_count = index.len();
 
-        let consistent = db_count == index_count;
+        let consistent = db_count + chunk_count == index_count;
         Ok(VerifyReport {
             db_count,
+            chunk_count,
             index_count,
             consistent,
         })
@@ -276,11 +287,31 @@ impl crate::Uteke {
 
         // Load all from SQLite and rebuild index (NULL embeddings filtered in load_all)
         let all_memories = self.store.load_all(None)?;
-        let items: Vec<(String, Vec<f32>)> = all_memories
+        let mut items: Vec<(String, Vec<f32>)> = all_memories
             .iter()
             .filter(|m| !m.embedding.is_empty())
             .map(|m| (m.id.clone(), m.embedding.clone()))
             .collect();
+
+        // Document chunk vectors live in the index under "chunk:<id>" keys.
+        // load_all returns memories only — without this the rebuild silently
+        // evicts every chunk entry (#1110). Chunk embeddings are persisted in
+        // document_chunks, so no re-embedding is needed.
+        let chunk_count = {
+            let chunks = self.store.load_all_chunk_embeddings()?;
+            let n = chunks.len();
+            items.extend(chunks.into_iter().map(|(id, emb)| {
+                let key = format!("chunk:{id}");
+                (key, emb)
+            }));
+            n
+        };
+        if chunk_count > 0 {
+            tracing::info!(
+                chunks = chunk_count,
+                "including document chunks in index rebuild"
+            );
+        }
 
         {
             let mut index = self
@@ -297,6 +328,7 @@ impl crate::Uteke {
             db_count: before_db,
             index_before: before_index,
             index_after: items.len(),
+            chunk_count,
         })
     }
 
@@ -353,17 +385,16 @@ impl crate::Uteke {
 
     /// Re-embed memories that have missing or empty embedding vectors.
     ///
-    /// Scans all non-deprecated memories, finds those with empty embeddings,
-    /// generates new embeddings, updates the database, and adds them to the index.
+    /// Scans active memories with NULL/empty embeddings via a dedicated SQL
+    /// query (`load_missing_embeddings`), generates new embeddings, updates
+    /// the database, and adds them to the index.
     pub fn reembed_missing(&self) -> Result<ReembedReport, Error> {
-        let all_memories = self.store.load_all(None)?;
-        let total_scanned = all_memories.len();
-
-        // Filter to memories with empty embeddings, excluding deprecated.
-        let missing: Vec<&Memory> = all_memories
-            .iter()
-            .filter(|m| !m.deprecated && m.embedding.is_empty())
-            .collect();
+        // Scan directly for NULL/empty embeddings (#1146). This must NOT go
+        // through load_all(): its `embedding IS NOT NULL` guard (kept for
+        // index.build() safety, #992) filtered out exactly the rows this
+        // function exists to repair, making NULL rows permanently invisible.
+        let missing: Vec<Memory> = self.store.load_missing_embeddings(None)?;
+        let total_scanned = self.store.load_all(None)?.len();
 
         let missing_count = missing.len();
         if missing_count == 0 {
@@ -475,6 +506,23 @@ impl crate::Uteke {
             cache_hits,
             cache_misses,
         })
+    }
+
+    /// Count PINNED (never-decay) memories, optionally per namespace (#1052).
+    /// Surfaced for MCP stats triage output.
+    pub fn count_pinned(&self, namespace: Option<&str>) -> Result<usize, Error> {
+        self.store.count_pinned(namespace)
+    }
+
+    /// Count DEPRECATED (soft-deleted) memories, optionally per namespace.
+    /// Audit/triage counter — hidden from recall but restorable (#1052).
+    pub fn count_deprecated(&self, namespace: Option<&str>) -> Result<usize, Error> {
+        self.store.count_deprecated(namespace)
+    }
+
+    /// Per-namespace memory counts for stats breakdown (#1052).
+    pub fn namespace_counts(&self) -> Result<Vec<(String, usize)>, Error> {
+        self.store.list_namespaces_with_counts()
     }
 
     /// Get aging status — breakdown of memories by access tier.
@@ -811,6 +859,91 @@ mod tests {
         assert_eq!(restored.deprecated, 3);
     }
 
+    #[ignore = "requires ONNX embedder — validates reembed repairs NULL-embedding rows (#1146)"]
+    #[test]
+    fn test_reembed_repairs_null_embedding_rows() {
+        // Regression test for #1146: `repair --reembed` used to scan through
+        // load_all(), whose `embedding IS NOT NULL` guard (#992) filtered out
+        // exactly the rows needing repair. NULL-embedding rows (write-path
+        // crash artifacts) were permanently invisible to reembed and doctor
+        // reported an unresolvable MISMATCH.
+        let dir = tempfile::tempdir().unwrap();
+        let uteke = crate::Uteke::open(dir.path().join("uteke.db")).unwrap();
+
+        // Create one healthy memory (gets a real embedding).
+        let id = uteke
+            .remember("raft consensus requires a majority quorum", &[], None, None)
+            .unwrap();
+
+        // Simulate a write-path crash artifact: NULL embedding.
+        let id_null = uteke
+            .remember("vector quantization compresses embeddings", &[], None, None)
+            .unwrap();
+        uteke
+            .graph_store()
+            .execute(
+                "UPDATE memories SET embedding = NULL WHERE id = ?1",
+                rusqlite::params![id_null],
+            )
+            .unwrap();
+
+        // And the empty-blob variant (what the old code could only see).
+        let id_empty = uteke
+            .remember(
+                "hybrid search blends keyword and vector signals",
+                &[],
+                None,
+                None,
+            )
+            .unwrap();
+        uteke
+            .graph_store()
+            .execute(
+                "UPDATE memories SET embedding = X'' WHERE id = ?1",
+                rusqlite::params![id_empty],
+            )
+            .unwrap();
+
+        // Scan finds both NULL and empty-blob rows.
+        let scanned = uteke.store.load_missing_embeddings(None).unwrap();
+        assert_eq!(
+            scanned.len(),
+            2,
+            "scan must see NULL-embedding rows, not just empty-blob ones"
+        );
+
+        // Reembed repairs both; the healthy row is untouched.
+        let report = uteke.reembed_missing().unwrap();
+        assert_eq!(report.missing_count, 2);
+        assert_eq!(report.reembedded, 2, "both rows must be re-embedded");
+        assert_eq!(report.failed, 0);
+
+        // DB no longer has NULL/empty embeddings among active memories.
+        let remaining: i64 = uteke
+            .graph_store()
+            .query_row(
+                "SELECT COUNT(*) FROM memories WHERE (embedding IS NULL OR length(embedding) = 0) AND deprecated = 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0);
+
+        // End-to-end: verify() reports a consistent store after repair.
+        let v = uteke.verify().unwrap();
+        assert!(
+            v.consistent,
+            "store must be consistent after reembed, got db={} index={}",
+            v.db_count, v.index_count
+        );
+
+        // Reembed is now a no-op.
+        let again = uteke.reembed_missing().unwrap();
+        assert_eq!(again.missing_count, 0);
+        assert_eq!(again.reembedded, 0);
+        let _ = (id, id_null, id_empty);
+    }
+
     #[test]
     fn test_cleanup_result_serialization() {
         use crate::memory::types::CleanupResult;
@@ -818,5 +951,84 @@ mod tests {
         let json = serde_json::to_string(&result).unwrap();
         let restored: CleanupResult = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.deleted, 5);
+    }
+
+    #[ignore = "requires ONNX embedder — verify/doctor count chunk vectors alongside memories"]
+    #[test]
+    fn test_verify_counts_doc_chunks() {
+        // Regression test for #1111: verify()/doctor() must count document
+        // chunk vectors on the DB side, otherwise any store with documents
+        // reports a memory-only count vs index (which holds memories AND
+        // chunk vectors) and flags a false MISMATCH.
+        let dir = tempfile::tempdir().unwrap();
+        let uteke = crate::Uteke::open(dir.path().join("uteke.db")).unwrap();
+        uteke
+            .doc_upsert(
+                "verify-chunks-doc",
+                "Verify Chunks Doc",
+                "A document about distributed systems and consensus algorithms like raft.",
+                &[],
+                None,
+            )
+            .unwrap();
+
+        let report = uteke.verify().unwrap();
+        assert_eq!(report.db_count, 0, "no memories in this store");
+        assert!(report.chunk_count >= 1, "doc chunks must be counted");
+        assert_eq!(
+            report.index_count,
+            report.db_count + report.chunk_count,
+            "index holds memories + chunk vectors"
+        );
+        assert!(
+            report.consistent,
+            "no false MISMATCH with documents present"
+        );
+    }
+
+    #[ignore = "requires ONNX embedder — validates repair() keeps doc chunk vectors indexed"]
+    #[test]
+    fn test_repair_preserves_doc_chunk_vectors() {
+        // Regression test for #1110: repair() rebuilt the index from
+        // load_all() (memories only), silently evicting every "chunk:<id>"
+        // vector. After repair, semantic doc search must still find chunks.
+        let dir = tempfile::tempdir().unwrap();
+        let uteke = crate::Uteke::open(dir.path().join("uteke.db")).unwrap();
+        let doc_id = uteke
+            .doc_upsert(
+                "repair-chunks-doc",
+                "Repair Chunks Doc",
+                "Chapter one introduces the architecture. Chapter two covers vector quantization theory in depth with mathematical foundations.",
+                &[],
+                None,
+            )
+            .unwrap();
+
+        // Sanity: semantic search finds the doc before repair.
+        let before = uteke
+            .doc_search("quantization theory mathematics", 5, "semantic")
+            .unwrap();
+        assert!(
+            !before.is_empty(),
+            "semantic doc search should find the doc pre-repair"
+        );
+
+        let report = uteke.repair().unwrap();
+        // Index must include memories (0 here) + doc chunks (>= 1).
+        assert!(
+            report.index_after >= 1,
+            "rebuild must include document chunk vectors, got index_after={}",
+            report.index_after
+        );
+
+        // After repair, the chunk vector must still be searchable.
+        let after = uteke
+            .doc_search("quantization theory mathematics", 5, "semantic")
+            .unwrap();
+        assert!(
+            !after.is_empty(),
+            "semantic doc search must still find doc {} after repair",
+            doc_id
+        );
     }
 }

@@ -290,6 +290,29 @@ jobs:
         run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }} -p uteke-server --allow-dirty
         continue-on-error: true
 
+      - name: Wait for crates.io index
+        run: sleep 30
+
+      - name: Verify crates.io versions
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          fail=0
+          for crate in uteke-core uteke-mcp uteke-cli uteke-server; do
+            for attempt in 1 2 3 4 5; do
+              MAX=$(curl -sf -A "uteke-release-verify" "https://crates.io/api/v1/crates/$crate" | jq -r '.crate.max_version') || MAX=""
+              [ "$MAX" = "$VERSION" ] && break
+              echo "attempt $attempt: $crate at $MAX (want $VERSION), waiting..."
+              sleep 30
+            done
+            if [ "$MAX" = "$VERSION" ]; then
+              echo "✓ $crate $VERSION live on crates.io"
+            else
+              echo "::error::$crate not at $VERSION on crates.io (found: $MAX) — publish step failed silently"
+              fail=1
+            fi
+          done
+          exit $fail
+
   package-legacy:
     name: Package Linux x64 legacy bundle
     needs: [build-release, build-ort-legacy]
@@ -302,13 +325,13 @@ jobs:
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       - name: Download standard Linux x64 artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: uteke-x86_64-unknown-linux-gnu-${{ steps.version.outputs.VERSION }}
           path: standard-artifact
 
       - name: Download legacy ORT artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ort-legacy-linux-x64
           path: ort-legacy
@@ -352,7 +375,7 @@ jobs:
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       - name: Download release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-artifacts
           pattern: uteke-*
@@ -389,58 +412,27 @@ jobs:
               echo "::error::RELEASE_NOTES.md contains unresolved placeholders (vX.Y.Z, #NNN, etc). Edit it before tagging, or delete the file to use auto-generation."
               exit 1
             fi
+            # Guard: reject stale notes from a previous release
+            if ! grep -q "## v${VER}" RELEASE_NOTES.md; then
+              echo "::error::RELEASE_NOTES.md does not mention v${VER} — it is stale from a previous release. Update it or delete it to use auto-generation."
+              exit 1
+            fi
             echo "Using committed RELEASE_NOTES.md"
             cp RELEASE_NOTES.md release-notes.md
           else
             echo "::notice::No RELEASE_NOTES.md found, auto-generating from CHANGELOG"
-            echo "## What's New in ${VER}" > release-notes.md
-            echo "" >> release-notes.md
-            cat changelog-body.md >> release-notes.md
-            echo "" >> release-notes.md
-            cat >> release-notes.md << RELEASEEOF
-
-          ### 📦 Downloads
-
-          Each archive contains three binaries + ONNX Runtime shared library:
-
-          | Binary | Description |
-          |--------|-------------|
-          | `uteke` | CLI tool |
-          | `uteke-serve` | HTTP server daemon |
-          | `uteke-mcp` | MCP server (stdio + HTTP) |
-          | `libonnxruntime.so*` / `libonnxruntime*.dylib` / `onnxruntime*.dll` | ONNX Runtime |
-
-          | Platform | File |
-          |----------|------|
-          | Linux x86_64 (AVX2) | `uteke-x86_64-unknown-linux-gnu-${VER}.tar.gz` |
-          | Linux x86_64 (Legacy, SSE4.2) | `uteke-x86_64-unknown-linux-gnu-legacy-${VER}.tar.gz` |
-          | Linux ARM64 | `uteke-aarch64-unknown-linux-gnu-${VER}.tar.gz` |
-          | macOS Apple Silicon | `uteke-aarch64-apple-darwin-${VER}.tar.gz` |
-          | Windows x86_64 | `uteke-x86_64-pc-windows-msvc-${VER}.zip` |
-
-          > **Legacy Bundle (Linux only)** — Includes a SSE4.2-only ORT sidecar (`ort-legacy/`) for CPUs without AVX2 (Intel Celeron J4125/N4020). Use this bundle to avoid SIGILL crashes on older hardware.
-
-          ### 🚀 Quick Start
-
-          ```bash
-          # Quick install (Linux / macOS)
-          curl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh | sh
-
-          # Pin a specific version
-          UTEKE_VERSION=${VER} curl -fsSL https://raw.githubusercontent.com/codecoradev/uteke/main/install.sh | sh
-
-          # Store a memory
-          uteke remember "Important context" --tags project
-
-          # Recall by meaning
-          uteke recall "what was that context?"
-
-          # Start server for fast AI agent access
-          uteke-serve --port 8767
-          ```
-
-          **Full changelog:** https://github.com/codecoradev/uteke/blob/main/CHANGELOG.md
-          RELEASEEOF
+            {
+              echo "## What's New in ${VER}"
+              echo ""
+              cat changelog-body.md
+              echo ""
+              # Static tail (downloads table + quick start) lives in a plain template
+              # file — NEVER inline it in a heredoc. Unquoted heredoc bodies undergo
+              # shell expansion: markdown backticks become command substitutions and
+              # get EXECUTED (v0.14.3: installer curl|sh ran on the runner, then
+              # uteke-serve blocked forever). Template file = zero expansion.
+              sed "s/__VER__/${VER}/g" scripts/release-notes-template.md
+            } > release-notes.md
           fi
 
       - name: Create GitHub Release
@@ -488,7 +480,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Download Linux binaries from build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: uteke-*-${{ github.ref_name }}
           path: release-artifacts

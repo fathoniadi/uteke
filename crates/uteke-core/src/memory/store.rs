@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS memories (
     last_accessed TEXT,
     deprecated INTEGER NOT NULL DEFAULT 0,
     deprecate_reason TEXT,
+    deprecated_at TEXT,
     valid_from TEXT,
     valid_until TEXT,
     memory_type TEXT NOT NULL DEFAULT 'fact',
@@ -29,7 +30,9 @@ CREATE TABLE IF NOT EXISTS memories (
     content_type TEXT NOT NULL DEFAULT 'text',
     slug TEXT,
     source TEXT,
-    source_type TEXT NOT NULL DEFAULT 'user'
+    source_type TEXT NOT NULL DEFAULT 'user',
+    author_type TEXT NOT NULL DEFAULT 'agent',
+    source_hash TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_memories_tags ON memories(tags);
 CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at);
@@ -81,7 +84,9 @@ CREATE TABLE IF NOT EXISTS timeline_events (
     memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
     event_type TEXT NOT NULL,
     event_data TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    actor TEXT,
+    evidence_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_timeline_memory ON timeline_events(memory_id);
 CREATE INDEX IF NOT EXISTS idx_timeline_type ON timeline_events(event_type);
@@ -174,7 +179,7 @@ pub(super) const SCHEMA_INDEXES: &[&str] = &[
 ];
 
 /// Current schema version. Increment when adding migrations.
-pub(super) const CURRENT_SCHEMA_VERSION: i32 = 15;
+pub(crate) const CURRENT_SCHEMA_VERSION: i32 = 18;
 
 /// Persistent SQLite store for memories.
 pub struct Store {
@@ -270,6 +275,48 @@ impl Store {
         Ok(rows > 0)
     }
 
+    /// Set the provenance content hash for a memory (#1172 Fase 1).
+    ///
+    /// `None` clears the hash (used by repair/backfill tooling). Returns
+    /// `false` when the memory does not exist.
+    pub fn set_source_hash(&self, id: &str, source_hash: Option<&str>) -> Result<bool, Error> {
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE memories SET source_hash = ?1 WHERE id = ?2",
+                rusqlite::params![source_hash, id],
+            )
+            .map_err(|e| Error::db("set source hash", e))?;
+        Ok(rows > 0)
+    }
+
+    /// Read the provenance content hash for a memory (#1172 Fase 1).
+    pub fn get_source_hash(&self, id: &str) -> Result<Option<String>, Error> {
+        use rusqlite::OptionalExtension;
+        self.conn
+            .query_row(
+                "SELECT source_hash FROM memories WHERE id = ?1",
+                rusqlite::params![id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| Error::db("get source hash", e))
+    }
+
+    /// Set author type on a memory (#1083): "human" or "agent".
+    /// Returns false if the memory does not exist.
+    pub fn set_author_type(&self, id: &str, author_type: &str) -> Result<bool, Error> {
+        crate::memory::types::validate_author_type(author_type)?;
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE memories SET author_type = ?1 WHERE id = ?2",
+                rusqlite::params![author_type, id],
+            )
+            .map_err(|e| Error::db("set author_type", e))?;
+        Ok(rows > 0)
+    }
+
     /// Recalculate importance for all memories.
     /// importance = 0.3*access_score + 0.3*recency_score + 0.2*connectivity + 0.2*is_pinned
     pub fn recompute_importance(&self) -> Result<usize, Error> {
@@ -328,6 +375,25 @@ impl Store {
             }
         }
         Ok(updated)
+    }
+
+    /// Infer embedding dimensions from any persisted embedding (#1166).
+    ///
+    /// Returns None when the store has no embeddings at all (fresh store).
+    /// Used when opening without an embedder backend on builds compiled
+    /// without the `onnx` feature: the vector index needs valid dims, and
+    /// existing data is the most truthful source.
+    pub fn infer_embedding_dims(&self) -> Option<usize> {
+        self.conn
+            .query_row(
+                "SELECT length(embedding) / 4 FROM memories \
+                 WHERE embedding IS NOT NULL AND length(embedding) > 0 \
+                 LIMIT 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .ok()
+            .map(|n| n as usize)
     }
 }
 
@@ -435,6 +501,8 @@ pub(crate) fn row_to_memory(row: &rusqlite::Row<'_>) -> Result<Memory, rusqlite:
         tracing::debug!("Failed to read deprecated field: {e}, defaulting to false");
         false
     });
+    let deprecated_at_str: Option<String> = row.get(21).ok().flatten();
+    let deprecated_at = deprecated_at_str.as_deref().and_then(parse_datetime_opt);
     let valid_from_str: Option<String> = row.get(11).ok().flatten();
     let valid_from = valid_from_str.as_deref().and_then(parse_datetime_opt);
     let valid_until_str: Option<String> = row.get(12).ok().flatten();
@@ -446,6 +514,7 @@ pub(crate) fn row_to_memory(row: &rusqlite::Row<'_>) -> Result<Memory, rusqlite:
     let slug: Option<String> = row.get(17).ok().flatten();
     let source: Option<String> = row.get(18).ok().flatten();
     let source_type: String = row.get(19).unwrap_or_else(|_| "unknown".to_string());
+    let author_type: String = row.get(20).unwrap_or_else(|_| "agent".to_string());
 
     Ok(Memory {
         id,
@@ -459,6 +528,7 @@ pub(crate) fn row_to_memory(row: &rusqlite::Row<'_>) -> Result<Memory, rusqlite:
         access_count,
         last_accessed,
         deprecated,
+        deprecated_at,
         valid_from,
         valid_until,
         memory_type,
@@ -468,6 +538,7 @@ pub(crate) fn row_to_memory(row: &rusqlite::Row<'_>) -> Result<Memory, rusqlite:
         slug,
         source,
         source_type,
+        author_type,
     })
 }
 
@@ -490,6 +561,7 @@ mod tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "fact".to_string(),
@@ -499,6 +571,7 @@ mod tests {
             slug: None,
             source: None,
             source_type: "user".to_string(),
+            author_type: "agent".to_string(),
         }
     }
 
@@ -515,6 +588,7 @@ mod tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "fact".to_string(),
@@ -524,6 +598,7 @@ mod tests {
             slug: None,
             source: None,
             source_type: "user".to_string(),
+            author_type: "agent".to_string(),
         }
     }
 
@@ -565,6 +640,128 @@ mod tests {
 
         let all = store.list(None, None, 10, 0).unwrap();
         assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn test_author_type_defaults_to_agent_on_fresh_db() {
+        // #1083: fresh DB — column default 'agent' applies on insert.
+        let store = Store::open(":memory:").unwrap();
+        store
+            .insert(&make_test_memory("at1", "fresh db default", &[]))
+            .unwrap();
+        let got = store.get_by_id("at1").unwrap().unwrap();
+        assert_eq!(got.author_type, "agent");
+    }
+
+    #[test]
+    fn test_author_type_set_and_invalid_rejected() {
+        // #1083: set_author_type writes valid values; invalid → Validation error.
+        let store = Store::open(":memory:").unwrap();
+        store
+            .insert(&make_test_memory("at2", "settable", &[]))
+            .unwrap();
+
+        assert!(store.set_author_type("at2", "human").unwrap());
+        assert_eq!(
+            store.get_by_id("at2").unwrap().unwrap().author_type,
+            "human"
+        );
+
+        assert!(store.set_author_type("at2", "agent").unwrap());
+        assert_eq!(
+            store.get_by_id("at2").unwrap().unwrap().author_type,
+            "agent"
+        );
+
+        let err = store.set_author_type("at2", "robot").unwrap_err();
+        assert!(
+            err.to_string().contains("Invalid author_type"),
+            "got: {err}"
+        );
+
+        // Nonexistent id → false, not error.
+        assert!(!store.set_author_type("nope", "human").unwrap());
+    }
+
+    #[test]
+    fn test_author_type_migration_v15_to_v16() {
+        // #1083: simulate a v15 DB (no author_type column) with existing rows,
+        // then reopen → init_schema applies migrate_v15_to_v16 → existing rows
+        // backfill to 'agent'.
+        let dir = std::env::temp_dir().join(format!("uteke-at-mig-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mig.db");
+
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL);
+                 INSERT INTO schema_version (version, applied_at) VALUES (15, '2026-01-01T00:00:00Z');
+                 CREATE TABLE memories (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    embedding BLOB,
+                    tags TEXT,
+                    metadata TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    namespace TEXT NOT NULL DEFAULT 'default',
+                    access_count INTEGER NOT NULL DEFAULT 0,
+                    last_accessed TEXT,
+                    deprecated INTEGER NOT NULL DEFAULT 0,
+                    deprecate_reason TEXT,
+                    valid_from TEXT,
+                    valid_until TEXT,
+                    memory_type TEXT NOT NULL DEFAULT 'fact',
+                    importance REAL NOT NULL DEFAULT 0.5,
+                    pinned INTEGER NOT NULL DEFAULT 0,
+                    content_type TEXT NOT NULL DEFAULT 'text',
+                    slug TEXT,
+                    source TEXT,
+                    source_type TEXT NOT NULL DEFAULT 'user'
+                 );
+                 INSERT INTO memories (id, content, embedding, tags, metadata, created_at, updated_at)
+                 VALUES ('old1', 'legacy row', NULL, '[]', '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');",
+            )
+            .unwrap();
+        }
+
+        // Reopen runs migrations up to v16.
+        let store = Store::open(path.to_str().unwrap()).unwrap();
+
+        let version: i32 = store
+            .conn
+            .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 18, "schema should be upgraded to current (v18)");
+
+        // Legacy row backfilled to 'agent'.
+        let at: String = store
+            .conn
+            .query_row(
+                "SELECT author_type FROM memories WHERE id = 'old1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(at, "agent");
+
+        // New insert with 'human' persists after migration.
+        assert!(store.set_author_type("old1", "human").unwrap());
+        let at2: String = store
+            .conn
+            .query_row(
+                "SELECT author_type FROM memories WHERE id = 'old1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(at2, "human");
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_file(dir.join("mig.db-wal")).ok();
+        std::fs::remove_file(dir.join("mig.db-shm")).ok();
+        std::fs::remove_dir(&dir).ok();
     }
 
     #[test]
@@ -1121,6 +1318,42 @@ mod tests {
         assert_eq!(lower.len(), 2);
     }
 
+    /// #1051: search_content(None) must search ACROSS namespaces — it used to
+    /// coerce None to the default namespace, hiding hits from other namespaces
+    /// (e.g. MCP uteke_search without a namespace argument). Also pins
+    /// hyphenated-identifier matching on the LIKE path.
+    #[test]
+    fn test_search_content_cross_namespace_and_hyphen() {
+        let store = Store::open(":memory:").unwrap();
+
+        let mut m = make_test_memory("x1", "uteke-cloud-dev is the private repo", &[]);
+        m.namespace = "repo-uteke".to_string();
+        store.insert(&m).unwrap();
+
+        let mut m2 = make_test_memory("x2", "unrelated note", &[]);
+        m2.namespace = "default".to_string();
+        store.insert(&m2).unwrap();
+
+        // Cross-namespace: None must find the non-default-namespace hit
+        let across = store.search_content("uteke-cloud-dev", None, 10).unwrap();
+        assert_eq!(across.len(), 1, "None must search across namespaces");
+        assert_eq!(across[0].id, "x1");
+
+        // Scoped search still works
+        let scoped = store
+            .search_content("uteke-cloud-dev", Some("repo-uteke"), 10)
+            .unwrap();
+        assert_eq!(scoped.len(), 1);
+
+        // Hyphenated identifier matches as literal substring
+        let hyphen = store.search_content("uteke-cloud-dev", None, 10).unwrap();
+        assert!(!hyphen.is_empty());
+
+        // Partial hyphen prefix also matches (substring semantics)
+        let partial = store.search_content("uteke-cloud", None, 10).unwrap();
+        assert_eq!(partial.len(), 1);
+    }
+
     #[test]
     fn test_search_content_namespace_scoped() {
         let store = Store::open(":memory:").unwrap();
@@ -1522,6 +1755,7 @@ mod tests {
             access_count: 0,
             last_accessed: None,
             deprecated,
+            deprecated_at: None,
             valid_from,
             valid_until,
             memory_type: "fact".to_string(),
@@ -1531,6 +1765,7 @@ mod tests {
             slug: None,
             source: None,
             source_type: "user".to_string(),
+            author_type: "agent".to_string(),
         }
     }
 
@@ -1793,7 +2028,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(version, 15, "schema_version should be 15 after migration");
+        assert_eq!(
+            version, CURRENT_SCHEMA_VERSION,
+            "schema_version should reach CURRENT after migration"
+        );
 
         // 7. Verify hierarchy columns now exist (in documents table).
         let cols = ["parent_id", "path", "depth", "sort_order", "has_children"];

@@ -63,6 +63,10 @@ pub enum Commands {
         /// Entity identifier for structured metadata
         #[arg(long)]
         entity: Option<String>,
+        /// Who authored the memory: human or agent (#1084). Default: agent
+        /// (matches the schema default, #1083).
+        #[arg(long)]
+        author_type: Option<String>,
         /// Category classification
         #[arg(long)]
         category: Option<String>,
@@ -104,9 +108,10 @@ pub enum Commands {
         /// Use strict threshold from config (min_score_strict)
         #[arg(long)]
         strict: bool,
-        /// Recall strategy: vector, fts5, hybrid, or graph (graph = hybrid +
+        /// Recall strategy: vector, fts5, hybrid, graph, or fusion (fusion =
+        /// weighted RRF of vector×1.7 + hybrid×1, #1123; graph = hybrid +
         /// graph-signal reranking, #378). Defaults to config's
-        /// `[recall].default_strategy` (hybrid).
+        /// `[recall].default_strategy` (fusion).
         #[arg(long)]
         strategy: Option<String>,
         /// Enable salience boost (how much each result matters) (#352).
@@ -119,6 +124,9 @@ pub enum Commands {
         /// When absent, recency uses the default weight (0.1). Use --no-recency to disable (#721).
         #[arg(long)]
         recency: Option<bool>,
+        /// Explain each result: show the ranking signals behind it (#1160)
+        #[arg(long)]
+        explain: bool,
         /// Follow relationship edges in memory metadata
         #[arg(long)]
         related: bool,
@@ -205,7 +213,8 @@ pub enum Commands {
         /// Delete ALL memories in namespace (requires --confirm)
         #[arg(long)]
         all: bool,
-        /// Confirm destructive operations
+        /// Confirm destructive operations (the non-interactive equivalent of
+        /// the y/N prompt; scripts and cron jobs must pass this)
         #[arg(long)]
         confirm: bool,
     },
@@ -258,6 +267,10 @@ pub enum Commands {
         /// Output file path (use - for stdout)
         #[arg(default_value = "-")]
         output: String,
+        /// Full structural export: rooms, graph, edges, documents, chunks,
+        /// timeline (manifest + tagged NDJSON) — round-trips the whole store (#1057)
+        #[arg(long)]
+        full: bool,
     },
     /// Import memories from JSONL, Markdown, or text files (re-embeds content)
     Import {
@@ -469,6 +482,26 @@ pub enum Commands {
         #[arg(long, default_value = "20")]
         limit: usize,
     },
+    /// Show the full provenance report for a memory (#1172)
+    Provenance {
+        /// Memory ID (UUID)
+        id: String,
+    },
+    /// Resolve a conflict: mark old_id superseded by new_id (#1053)
+    Supersede {
+        /// Full UUID or unambiguous prefix of the STALE memory
+        old: String,
+        /// Full UUID or unambiguous prefix of the CURRENT memory
+        new: String,
+        /// Why it was superseded (stored on the deprecation)
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Inspect the contradiction resolution ledger (#1172)
+    Contradictions {
+        #[command(subcommand)]
+        command: ContradictionCommands,
+    },
     /// Document operations — wiki/knowledge base (#406, #411)
     Doc {
         #[command(subcommand)]
@@ -675,6 +708,25 @@ pub enum TagCommands {
     },
 }
 
+/// Subcommands for the contradiction resolution ledger (#1172).
+#[derive(Subcommand)]
+pub enum ContradictionCommands {
+    /// List superseded-but-not-restored memories (the resolution ledger)
+    List {
+        /// Filter by namespace
+        #[arg(long)]
+        namespace: Option<String>,
+        /// Maximum entries to show
+        #[arg(long, default_value = "50")]
+        limit: usize,
+    },
+    /// Restore a superseded memory — undoes the supersession pair
+    Undo {
+        /// Memory ID (UUID) of the retired memory to restore
+        id: String,
+    },
+}
+
 /// Subcommands for namespace management.
 #[derive(Subcommand)]
 pub enum NamespaceCommands {
@@ -689,6 +741,34 @@ pub enum NamespaceCommands {
     Switch {
         /// Namespace name to set as default
         name: String,
+    },
+    /// Move a memory to another namespace (#1181)
+    Move {
+        /// Memory ID
+        id: String,
+        /// Target namespace
+        namespace: String,
+    },
+    /// Rename a namespace — merges into the target when it already exists (#1181)
+    Rename {
+        /// Current namespace name
+        from: String,
+        /// New namespace name
+        to: String,
+    },
+    /// Delete a namespace with an explicit strategy for its memories (#1181)
+    Delete {
+        /// Namespace to delete
+        name: String,
+        /// What happens to its memories: refuse (default), merge, deprecate
+        #[arg(long, default_value = "refuse")]
+        strategy: String,
+        /// Target namespace when strategy = merge
+        #[arg(long)]
+        target: Option<String>,
+        /// Confirm the deletion (required)
+        #[arg(long)]
+        confirm: bool,
     },
 }
 
@@ -790,6 +870,21 @@ pub enum RoomCommands {
     ListRooms {
         /// Document slug
         doc_slug: String,
+    },
+    /// Consolidate a room's memories into fewer, denser records (#1088).
+    ///
+    /// Dry-run by default: shows the batching plan and estimated LLM calls
+    /// without contacting any API. Pass --apply to execute (requires
+    /// extraction LLM config in uteke.toml or UTEKE_* env vars).
+    Consolidate {
+        /// Room ID
+        room_id: String,
+        /// Execute the plan (LLM calls + store writes). Omit for dry-run.
+        #[arg(long)]
+        apply: bool,
+        /// Max LLM requests for this run (default 10, failed calls count too)
+        #[arg(long, default_value_t = 10)]
+        max_calls: usize,
     },
 }
 

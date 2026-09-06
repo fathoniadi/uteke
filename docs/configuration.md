@@ -44,6 +44,14 @@ host = "127.0.0.1"
 
 # Server port
 port = 8767
+
+[vector]
+# Vector search engine when the binary ships BOTH engines (official builds):
+# "usearch" (default — HNSW, C++ FFI, fastest) or "vecq" (training-free
+# quantization, zero C++ dep — mobile/slim builds). Switching engines on an
+# existing store auto-rebuilds the index from SQLite on next open (#1168).
+# Env override: UTEKE_VECTOR_BACKEND=usearch|vecq
+backend = "usearch"
 ```
 
 ## Server Mode
@@ -196,13 +204,15 @@ min_score = 0.3
 min_score_strict = 0.5
 
 # Default recall strategy for `uteke recall` when --strategy is not given.
-# One of: vector | fts5 | hybrid | graph.
+# One of: fusion | vector | fts5 | hybrid | graph.
+#   fusion — weighted RRF of the vector and hybrid rankings (default since 0.16.0;
+#            LongMemEval 500Q R@5 0.946 vs 0.854 hybrid, #1123)
 #   vector — vector similarity only (original behavior)
 #   fts5   — full-text search only
-#   hybrid — vector + FTS5 fused via Reciprocal Rank Fusion (default)
+#   hybrid — vector + FTS5 fused via Reciprocal Rank Fusion (k=60)
 #   graph  — hybrid + graph-signal reranking (#378): well-connected memories
 #            get a subtle log-scaled score boost
-default_strategy = "hybrid"
+default_strategy = "fusion"
 
 # Graph-augmented reranking weights (only affect the `graph` strategy).
 # Boosts are additive + log-scaled, so 0.1 is subtle and saturates quickly.
@@ -215,7 +225,7 @@ graph_rerank_enabled = true   # master switch; false → graph acts like hybrid
 |---------|---------|-------------|
 | `min_score` | 0.3 | Minimum similarity score (0.0-1.0). **CLI only.** |
 | `min_score_strict` | 0.5 | Strict-mode threshold (used with `--strict`). **CLI only.** |
-| `default_strategy` | `hybrid` | Default recall strategy (`vector\|fts5\|hybrid\|graph`) |
+| `default_strategy` | `fusion` | Default recall strategy (`vector\|fts5\|hybrid\|graph\|fusion`). Since 0.16.0 `fusion` (weighted RRF: vector×1.7 + hybrid×1, #1123) is the default — LongMemEval fast50 R@5 0.98 vs 0.9267 hybrid |
 | `graph_density_weight` | 0.1 | Edge-density boost weight (graph strategy only) |
 | `graph_authority_weight` | 0.1 | Incoming-edge authority boost weight (graph strategy only) |
 | `graph_rerank_enabled` | true | Master switch for graph reranking |
@@ -265,11 +275,12 @@ Resolution order (highest priority first):
 | `UTEKE_NAMESPACE` | `[store] namespace` | `default` | Default namespace (applied in CLI) |
 | `UTEKE_AUTH_TOKEN` | — | — | Server auth token (applied in server) |
 | `UTEKE_LOG_LEVEL` | `[logging] level` | `warn` | Log level (trace/debug/info/warn/error) |
+| `UTEKE_VECTOR_BACKEND` | `[vector] backend` | compiled-in default | Vector engine when both are compiled in: `usearch`, `vecq`. Ignored (with a warning) on single-engine builds or unknown values. Switching engines on an existing store auto-rebuilds the index from SQLite |
 | `UTEKE_SERVER_HOST` | `[server] host` | `127.0.0.1` | Server bind address |
 | `UTEKE_SERVER_PORT` | `[server] port` | `8767` | Server port |
 | `UTEKE_RECALL_MIN_SCORE` | `[recall] min_score` | `0.3` | Default similarity threshold |
 | `UTEKE_RECALL_MIN_SCORE_STRICT` | `[recall] min_score_strict` | `0.5` | Strict threshold |
-| `UTEKE_RECALL_STRATEGY` | `[recall] default_strategy` | `hybrid` | Default recall strategy (`vector\|fts5\|hybrid\|graph`) |
+| `UTEKE_RECALL_STRATEGY` | `[recall] default_strategy` | `fusion` | Default recall strategy (`vector\|fts5\|hybrid\|graph\|fusion`) |
 | `UTEKE_GRAPH_DENSITY_WEIGHT` | `[recall] graph_density_weight` | `0.1` | Edge-density boost weight |
 | `UTEKE_GRAPH_AUTHORITY_WEIGHT` | `[recall] graph_authority_weight` | `0.1` | Incoming-edge authority boost weight |
 | `UTEKE_GRAPH_RERANK_ENABLED` | `[recall] graph_rerank_enabled` | `true` | Master switch for graph reranking |

@@ -13,8 +13,16 @@ categories = ["command-line-utilities", "development-tools"]
 name = "uteke"
 path = "src/main.rs"
 
+[features]
+# Dual-engine default (#1168): ship BOTH engines, runtime-selectable via
+# UTEKE_VECTOR_BACKEND / [vector] backend. Slim builds: --no-default-features
+# --features vecq (mobile, pure Rust) or --features usearch (classic).
+default = ["usearch", "vecq"]
+usearch = ["uteke-core/usearch"]
+vecq = ["uteke-core/vecq"]
+
 [dependencies]
-uteke-core = { path = "../uteke-core", version = "0.14.3", features = ["onnx"] }
+uteke-core = { path = "../uteke-core", version = "0.17.0", default-features = false, features = ["onnx"] }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
