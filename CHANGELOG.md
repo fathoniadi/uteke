@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **CLI recall with the default fusion strategy returned an empty set** — the CLI resolved `min_score` from config (default 0.3) before considering the strategy, and fusion/hybrid/graph score on the RRF scale (typically 0.02–0.2), not cosine similarity — so the default threshold filtered everything. The CLI now defaults to 0.0 for rank-based strategies (matching the HTTP server's `DEFAULT_MIN_SCORE`); explicit `--min`/`--strict` are honored verbatim on every strategy. Also fixed the stale "Valid options" error message that omitted `fusion`. Note: this bug is present in upstream 0.17.0 as well (its fusion tests are `#[ignore]`d and pass `min_score: 0.0` explicitly) — surfaced by a full functional smoke test of every surface (CLI/MCP/HTTP/web).
+
+- **`count_embeddable` counted soft-forgotten memories** — it filtered `embedding IS NOT NULL` but not `deprecated = 0`, so after a soft-forget the DB-side count still included the row the index had dropped and doctor reported a permanent false MISMATCH (#1047 invariant violated). Both branches now filter `deprecated = 0`, mirroring `load_all()` (the index-build source of truth).
+
+- **Three cross-entity edge tests collided with the doc_stub auto-creation** — `upsert_document()` auto-inserts a deprecated `doc_stub:true` FK-placeholder memory row with the document's ID, but the tests (inherited from upstream) still manually stubbed the same ID → `UNIQUE constraint failed: memories.id`. The manual stubs are replaced with assertions that the auto-created placeholder exists, so the tests now verify the fork behavior directly.
+
+- **`GET /doctor` was missing from the API registry** — the route (added with the server-side doctor, #11/#8) was never registered in `ENDPOINTS`, failing `registry_covers_handler_routes` and drifting `docs/api-reference.md`. Registered and the docs regenerated via docgen.
+
+- **uteke-web auth store ignored `UTEKE_HOME`** — the default `db_path`/`audit_log_path` were hardcoded `~/.codecora/uteke/…` tilde paths, so `uteke-web user add`/`serve` wrote users, clients, and sessions into the REAL auth store even when `UTEKE_HOME` pointed every other uteke binary at an isolated home (found during a smoke test: a throwaway user landed in the production `uteke-web.db`). Defaults now resolve via the canonical `uteke_core::uteke_home()` (UTEKE_HOME env > ~/.codecora/uteke) — same resolver the CLI and MCP use for the memory store; an explicit `db_path` in uteke.toml still wins, and the no-UTEKE_HOME default is byte-for-byte unchanged.
+
+- **`repair_incremental` did not compile after the 0.17 merge** — `RepairReport` gained `chunk_count` (#1110) but the incremental-repair initializer was not updated. It now reports the persisted chunk count (same source as verify/repair); incremental repair never evicts chunk entries so the persisted count is the honest value.
+
+### Changed
+
+- **uteke-web recall is now strategy-correct** — the dashboard's semantic search no longer hardcodes `strategy: "hybrid"`: the field is omitted by default so the upstream default applies (fusion since 0.16.0, or `[recall] default_strategy`), with an optional `strategy` query param passthrough and a strategy picker in the UI (Server default/Fusion/Hybrid/Vector/Fts5/Graph). The memories list now requests `include_meta: true` (#1188) for exact `has_more` (with a bare-array fallback for pre-0.17 upstreams), and `DashboardMemory` carries a `deprecated` flag surfaced as a "superseded" badge in rows and the detail view.
+
 ## [0.17.0] — 2026-09-06
 
 Minor release. Theme: **inspectable, trustworthy memory** — explain recall on

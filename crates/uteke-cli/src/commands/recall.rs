@@ -62,10 +62,41 @@ pub(crate) fn run_recall(
         SearchType::Memory | SearchType::Document => true,
     };
 
-    // Resolve threshold: --min > --strict (→ config min_score_strict) > config min_score > 0.0
+    // Resolve strategy FIRST so the threshold can be strategy-aware:
+    // --strategy flag > config [recall].default_strategy > built-in default
+    // ("fusion" since 0.16.0). Unknown values are a loud error so a typo
+    // never silently changes recall semantics.
+    let strategy_name = strategy.unwrap_or(&config.recall.default_strategy);
+    let resolved_strategy = match RecallStrategy::from_str_opt(strategy_name) {
+        Some(s) => s,
+        None => {
+            return Err(format!(
+                "Invalid strategy '{strategy_name}'. Valid options: vector, fts5, hybrid, graph, fusion."
+            ));
+        }
+    };
+
+    // Resolve threshold: --min > --strict (→ config min_score_strict) >
+    // config min_score > 0.0.
+    //
+    // Rank-based strategies (fusion/hybrid/graph, #1123/#378) score on the
+    // RRF scale (typically 0.02–0.2), NOT cosine similarity (0.0–1.0).
+    // Applying the config-default cosine threshold (0.3) to them filters
+    // EVERYTHING — `uteke recall` with the default fusion strategy returned
+    // an empty set until this fix. The HTTP server surface already defaults
+    // to 0.0 (`DEFAULT_MIN_SCORE`, uteke-server types.rs), so the CLI must
+    // match or the two surfaces disagree. Explicit --min / --strict are
+    // still honored verbatim on every strategy.
     let min_score = match min {
         Some(m) => m,
         None if strict => config.recall.min_score_strict as f32,
+        None if matches!(
+            resolved_strategy,
+            RecallStrategy::Fusion | RecallStrategy::Hybrid | RecallStrategy::Graph
+        ) =>
+        {
+            0.0
+        }
         None => config.recall.min_score as f32,
     };
 
@@ -78,19 +109,6 @@ pub(crate) fn run_recall(
         None
     } else {
         Some(tag_refs.as_slice())
-    };
-
-    // Resolve strategy: --strategy flag > config [recall].default_strategy
-    // > built-in default ("hybrid"). Unknown values fall back to vector with
-    // a warning so a typo never silently changes recall semantics.
-    let strategy_name = strategy.unwrap_or(&config.recall.default_strategy);
-    let resolved_strategy = match RecallStrategy::from_str_opt(strategy_name) {
-        Some(s) => s,
-        None => {
-            return Err(format!(
-                "Invalid strategy '{strategy_name}'. Valid options: vector, fts5, hybrid, graph."
-            ));
-        }
     };
 
     // #352/#721: dual-axis salience/recency boost.

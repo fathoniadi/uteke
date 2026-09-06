@@ -376,10 +376,16 @@ impl crate::Uteke {
             }
         }
 
+        // Incremental repair only inserts missing memories — chunk entries
+        // already in the index are untouched, so report the persisted chunk
+        // count (same source as verify/repair, #1110).
+        let chunk_count = self.store.load_all_chunk_embeddings()?.len();
+
         Ok(RepairReport {
             db_count: before_db,
             index_before: before_index,
             index_after: before_index + added,
+            chunk_count,
         })
     }
 

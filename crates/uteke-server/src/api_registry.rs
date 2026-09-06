@@ -48,6 +48,15 @@ pub const ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         method: "GET",
+        path: "/doctor",
+        description: "Run the health-check doctor via the already-running server (avoids the CLI's index file lock, #11). `?deep=true` adds the semantic-hygiene checks from `doctor_deep()` (#8).",
+        request_type: None,
+        response_type: Some("DoctorReport"),
+        excludes_deprecated: false,
+        issues: &["#11", "#8"],
+    },
+    Endpoint {
+        method: "GET",
         path: "/guide",
         description: "Returns the agent-facing memory tools guide for system prompt injection (#1010).",
         request_type: None,

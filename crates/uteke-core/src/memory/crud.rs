@@ -699,20 +699,23 @@ impl super::Store {
 
     /// Count memories that are expected to have a vector-index entry.
     ///
-    /// Mirrors the `WHERE embedding IS NOT NULL` filter in `load_all()`
-    /// (the source of truth for what gets indexed). Some memories are
-    /// intentionally never embedded — e.g. the `doc_stub:true` placeholder
-    /// rows auto-inserted by `upsert_document()` solely to satisfy
-    /// `memory_edges.target_id`'s FK to `memories(id)` for `references_doc`
-    /// edges (see documents.rs). Comparing the *total* row count against
-    /// the index count would flag those as a permanent, unfixable
-    /// "inconsistency"; comparing against this embeddable count does not.
+    /// Mirrors the filters in `load_all()` (the source of truth for what
+    /// gets indexed): `embedding IS NOT NULL` AND `deprecated = 0`. Some
+    /// memories are intentionally never embedded — e.g. the `doc_stub:true`
+    /// placeholder rows auto-inserted by `upsert_document()` solely to
+    /// satisfy `memory_edges.target_id`'s FK to `memories(id)` for
+    /// `references_doc` edges (see documents.rs). Soft-forgotten memories
+    /// (deprecated = 1) keep their embedding column but are removed from
+    /// the index by `forget()`, so they must be excluded too or doctor
+    /// reports a permanent false MISMATCH after every soft-forget (#1047).
+    /// Comparing the *total* row count against the index count would flag
+    /// those as unfixable "inconsistencies"; this count does not.
     pub fn count_embeddable(&self, namespace: Option<&str>) -> Result<usize, Error> {
         let count: usize = match namespace {
             Some(ns) => self
                 .conn
                 .query_row(
-                    "SELECT COUNT(*) FROM memories WHERE namespace = ?1 AND embedding IS NOT NULL",
+                    "SELECT COUNT(*) FROM memories WHERE namespace = ?1 AND embedding IS NOT NULL AND deprecated = 0",
                     params![ns],
                     |row| row.get::<_, i64>(0),
                 )
@@ -720,7 +723,7 @@ impl super::Store {
             None => self
                 .conn
                 .query_row(
-                    "SELECT COUNT(*) FROM memories WHERE embedding IS NOT NULL",
+                    "SELECT COUNT(*) FROM memories WHERE embedding IS NOT NULL AND deprecated = 0",
                     [],
                     |row| row.get::<_, i64>(0),
                 )

@@ -42,6 +42,14 @@ Unpin a memory by ID (legacy — prefer /memory/pin with pin=false).
 
 ## 📝 Other
 
+#### 🟢 `GET` `/doctor`
+
+Run the health-check doctor via the already-running server (avoids the CLI's index file lock, #11). `?deep=true` adds the semantic-hygiene checks from `doctor_deep()` (#8).
+
+**Response**: [`DoctorReport`](#doctorreport)
+
+*Related: `#11`, `#8`*
+
 #### 🟢 `GET` `/guide`
 
 Returns the agent-facing memory tools guide for system prompt injection (#1010).

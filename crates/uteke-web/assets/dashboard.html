@@ -538,6 +538,17 @@ hr { border-color: var(--u-border); opacity: 0.5; }
           </select>
         </div>
         <div class="col-6 col-md-3">
+          <label class="form-label small text-muted mb-1">Strategy</label>
+          <select id="strategy" class="form-select form-select-sm" disabled title="Recall strategy — semantic mode only. Empty = server default (fusion since uteke 0.16).">
+            <option value="">Server default (fusion)</option>
+            <option value="fusion">Fusion</option>
+            <option value="hybrid">Hybrid</option>
+            <option value="vector">Vector</option>
+            <option value="fts5">Fts5</option>
+            <option value="graph">Graph</option>
+          </select>
+        </div>
+        <div class="col-6 col-md-3">
           <label class="form-label small text-muted mb-1">Namespace</label>
           <select id="ns" class="form-select form-select-sm"></select>
         </div>
@@ -1150,7 +1161,7 @@ applyTheme(getStoredTheme());
 applyMode(getStoredMode());
 
 const TYPES = ["fact","procedure","preference","decision","context","note","insight","reference","event"];
-let S = { q:"", mode:"list", ns:"", tag:"", sort:"created:desc", offset:0, limit:20, rows:[], hasMore:false };
+let S = { q:"", mode:"list", strategy:"", ns:"", tag:"", sort:"created:desc", offset:0, limit:20, rows:[], hasMore:false };
 let detailMem = null, forgetId = null, editId = null;
 let bsModals = {};
 
@@ -1262,6 +1273,7 @@ async function load(){
   const params = new URLSearchParams();
   if(S.q) params.set("q", S.q);
   if(S.mode) params.set("mode", S.mode);
+  if(S.mode==="semantic" && S.strategy) params.set("strategy", S.strategy);
   if(S.tag) params.set("tag", S.tag);
   if(S.ns) params.set("namespace", S.ns);
   params.set("limit", S.limit);
@@ -1308,6 +1320,7 @@ function render(){
             <span class="${pinClr} cursor-pointer" onclick="togglePin('${esc(m.id)}', ${!m.pinned})" title="Pin">${pin}</span>
             <span class="id-mono cursor-pointer" onclick="openDetail('${esc(m.id)}')">${esc(shortId(m.id))}</span>
             <span class="badge type-badge bg-${typeColor(m.memory_type||"note")}">${esc(m.memory_type||"note")}</span>
+            ${m.deprecated ? `<span class="badge bg-warning text-white" title="Superseded by a newer memory">superseded</span>` : ""}
             <div class="dropdown ms-auto">
               <button class="btn btn-sm btn-outline-secondary border-0 py-0 px-1" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-three-dots-vertical"></i></button>
               <ul class="dropdown-menu dropdown-menu-end">
@@ -1387,23 +1400,28 @@ function onSearchInput(){
     // unless the user already picked something else.
     if((S.mode==="semantic"||S.mode==="fts") && S.sort==="created:desc"){ S.sort="score:desc"; $("sort").value="score:desc"; }
     if(S.mode==="list" && S.sort==="score:desc"){ S.sort="created:desc"; $("sort").value="created:desc"; }
+    $("strategy").disabled = S.mode !== "semantic";
     load();
   }, 300);
 }
 function onModeChange(){
   S.mode = $("mode").value; S.offset = 0;
+  $("strategy").disabled = S.mode !== "semantic";
   if((S.mode==="semantic"||S.mode==="fts")){
     if(!S.q) $("q").focus();
     if(S.sort==="created:desc"){ S.sort="score:desc"; $("sort").value="score:desc"; }
   } else if(S.sort==="score:desc"){ S.sort="created:desc"; $("sort").value="created:desc"; }
   load();
 }
+function onStrategyChange(){
+  S.strategy = $("strategy").value; S.offset = 0; load();
+}
 function onNsChange(){ S.ns = $("ns").value; S.offset = 0; loadTags(); loadStats(); load(); }
 function onTagChange(){ S.tag = $("tag").value; S.offset = 0; load(); }
 function onSortChange(){ S.sort = $("sort").value; render(); }
 function onPerPage(){ S.limit = parseInt($("perpage").value,10)||20; S.offset = 0; load(); }
 function filterTag(t){ $("tag").value = t; S.tag = t; S.offset = 0; load(); }
-function resetFilters(){ clearTimeout(debounceT); const lim = S.limit||20; S={q:"",mode:"list",ns:"",tag:"",sort:"created:desc",offset:0,limit:lim,rows:[],hasMore:false}; $("q").value=""; $("mode").value="list"; $("ns").value=""; $("tag").value=""; $("sort").value="created:desc"; loadTags(); loadStats(); load(); }
+function resetFilters(){ clearTimeout(debounceT); const lim = S.limit||20; S={q:"",mode:"list",strategy:"",ns:"",tag:"",sort:"created:desc",offset:0,limit:lim,rows:[],hasMore:false}; $("q").value=""; $("mode").value="list"; $("strategy").value=""; $("strategy").disabled=true; $("ns").value=""; $("tag").value=""; $("sort").value="created:desc"; loadTags(); loadStats(); load(); }
 function pagePrev(){ if(S.offset>=S.limit){ S.offset-=S.limit; load(); } }
 function pageNext(){ if(S.hasMore){ S.offset+=S.limit; load(); } }
 function goToPage(p){ const off = (p - 1) * S.limit; if(off >= 0 && off !== S.offset){ S.offset = off; load(); } }
@@ -1418,6 +1436,7 @@ async function openDetail(id){
         <dt class="col-sm-3">ID</dt><dd class="col-sm-9 id-mono">${esc(m.id)}</dd>
         <dt class="col-sm-3">Content</dt><dd class="col-sm-9" style="white-space:pre-wrap;word-break:break-word">${esc(m.content)}</dd>
         <dt class="col-sm-3">Type</dt><dd class="col-sm-9"><span class="badge type-badge bg-${typeColor(m.memory_type||"note")}">${esc(m.memory_type||"note")}</span></dd>
+        ${m.deprecated ? `<dt class="col-sm-3">Status</dt><dd class="col-sm-9"><span class="badge bg-warning text-white">superseded</span> <span class="text-muted small">replaced by a newer memory</span></dd>` : ""}
         <dt class="col-sm-3">Tags</dt><dd class="col-sm-9">${(m.tags||[]).map(t=>`<span class="badge bg-info text-white me-1">${esc(t)}</span>`).join("") || "—"}</dd>
         <dt class="col-sm-3">Importance</dt><dd class="col-sm-9"><span class="imp-bar"><span style="width:${Math.round((m.importance??0)*100)}%;background:${impColor(m.importance??0)}"></span></span> <span id="detail-importance-val">${(m.importance??0).toFixed(2)}</span></dd>
         <dt class="col-sm-3">Pinned</dt><dd class="col-sm-9">${m.pinned ? "★ yes" : "no"}</dd>
@@ -1634,6 +1653,7 @@ function init(){
   initModals();
   $("q").addEventListener("input", onSearchInput);
   $("mode").addEventListener("change", onModeChange);
+  $("strategy").addEventListener("change", onStrategyChange);
   $("ns").addEventListener("change", onNsChange);
   $("tag").addEventListener("change", onTagChange);
   $("sort").addEventListener("change", onSortChange);

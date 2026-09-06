@@ -1852,23 +1852,11 @@ mod tests {
     //
     // NOTE: memory_edges has FK constraints → memories(id) on both source_id
     // and target_id. Document IDs don't exist in memories, so direct
-    // add_memory_edge(memory_id, doc_id, REFERENCES_DOC) violates the FK.
-    // To test edge operations with document-like targets, we insert a stub
-    // memory row with the document ID. This matches how the schema works
-    // and exercises the actual edge CRUD code paths.
-
-    /// Helper: insert a stub memory row with a given ID (bypasses FK constraints).
-    fn stub_memory(store: &Store, id: &str) {
-        let now = chrono::Utc::now().to_rfc3339();
-        store
-            .conn
-            .execute(
-                "INSERT INTO memories (id, content, namespace, created_at, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![id, "stub", "default", now, now],
-            )
-            .unwrap();
-    }
+    // add_memory_edge(memory_id, doc_id, REFERENCES_DOC) would violate the
+    // FK — but upsert_document() auto-creates a deprecated doc_stub:true
+    // placeholder memory row with the document's ID (see documents.rs), so
+    // the tests below only create the document and assert the placeholder
+    // exists before exercising the edge CRUD code paths.
 
     #[test]
     fn cross_entity_doc_edge_round_trip() {
@@ -1901,8 +1889,13 @@ mod tests {
         let mem_id = m.id.clone();
         store.insert(&m).unwrap();
 
-        // Stub the doc ID in memories so the FK on memory_edges.target_id is satisfied.
-        stub_memory(&store, "doc-1");
+        // upsert_document auto-creates the deprecated doc_stub:true FK
+        // placeholder row with the document's ID — verify it exists so the
+        // memory_edges.target_id FK is satisfied without a manual stub.
+        assert!(
+            store.get_by_id("doc-1").unwrap().is_some(),
+            "upsert_document must auto-create the FK placeholder memory row"
+        );
 
         // 3. Insert edge: memory → document, type=references_doc.
         store
@@ -1947,7 +1940,10 @@ mod tests {
             has_children: false,
         };
         store.upsert_document(&doc).unwrap();
-        stub_memory(&store, "doc-bl");
+        assert!(
+            store.get_by_id("doc-bl").unwrap().is_some(),
+            "upsert_document must auto-create the FK placeholder memory row"
+        );
 
         let m = mem("memory with backlink", &[]);
         let mem_id = m.id.clone();
@@ -1995,7 +1991,10 @@ mod tests {
             has_children: false,
         };
         store.upsert_document(&doc).unwrap();
-        stub_memory(&store, "doc-idem");
+        assert!(
+            store.get_by_id("doc-idem").unwrap().is_some(),
+            "upsert_document must auto-create the FK placeholder memory row"
+        );
 
         let m = mem("idempotent memory", &[]);
         let mem_id = m.id.clone();

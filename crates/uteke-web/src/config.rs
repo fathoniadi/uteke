@@ -27,8 +27,16 @@ pub struct WebConfig {
     /// JWT signing secret (HS256). Env: UTEKE_WEB_JWT_SECRET
     pub jwt_secret: String,
     /// SQLite DB path for the auth store.
+    ///
+    /// Default resolves via `uteke_core::uteke_home()` (UTEKE_HOME env >
+    /// ~/.codecora/uteke) so an isolated UTEKE_HOME never silently writes
+    /// to the real auth store — the same canonical resolver the CLI and
+    /// MCP use for the memory store. An explicit `db_path` in uteke.toml
+    /// still wins.
     pub db_path: String,
     /// Audit trail JSONL path (always ON).
+    ///
+    /// Default follows `db_path`'s uteke_home resolution (see above).
     pub audit_log_path: String,
     /// Extra headers injected into every upstream (uteke-server) request,
     /// in addition to the static `Authorization: Bearer <upstream_token>`.
@@ -87,14 +95,36 @@ pub struct UpstreamHeader {
 
 impl Default for WebConfig {
     fn default() -> Self {
+        // Auth store + audit log live beside the memory store, resolved via
+        // the canonical uteke_home() (UTEKE_HOME env > ~/.codecora/uteke) —
+        // NOT a hardcoded tilde path. A hardcoded default silently ignored
+        // UTEKE_HOME and wrote to the real auth store even when the operator
+        // pointed every other uteke binary at an isolated home (found during
+        // a smoke test: `uteke-web user add` created a user in the real DB).
+        // Fallback keeps the literal tilde path (expand_tilde resolves it)
+        // when the home directory cannot be determined at all.
+        let home_defaults = uteke_core::uteke_home().ok().map(|h| {
+            (
+                h.join("uteke-web.db").to_string_lossy().into_owned(),
+                h.join("uteke-web-audit.jsonl")
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        });
+        let (db_path, audit_log_path) = home_defaults.unwrap_or_else(|| {
+            (
+                "~/.codecora/uteke/uteke-web.db".to_string(),
+                "~/.codecora/uteke/uteke-web-audit.jsonl".to_string(),
+            )
+        });
         Self {
             listen: "127.0.0.1:8768".to_string(),
             issuer: "http://localhost:8768".to_string(),
             upstream: "http://127.0.0.1:8767".to_string(),
             upstream_token: String::new(),
             jwt_secret: String::new(),
-            db_path: "~/.codecora/uteke/uteke-web.db".to_string(),
-            audit_log_path: "~/.codecora/uteke/uteke-web-audit.jsonl".to_string(),
+            db_path,
+            audit_log_path,
             upstream_headers: Vec::new(),
             trusted_proxies: Vec::new(),
             log_dir: String::new(),
@@ -427,6 +457,28 @@ mod tests {
         unsafe {
             std::env::remove_var("UTEKE_WEB_JWT_SECRET");
             std::env::remove_var("UTEKE_WEB_UPSTREAM_TOKEN");
+        }
+    }
+
+    /// UTEKE_HOME must redirect the default auth-store DB and audit log —
+    /// a hardcoded tilde default silently wrote to the real auth store even
+    /// with an isolated home (regression test for the smoke-test incident).
+    #[test]
+    fn uteke_home_redirects_default_db_paths() {
+        unsafe {
+            std::env::set_var("UTEKE_HOME", "/tmp/uteke-web-iso-home");
+        }
+        let c = WebConfig::default();
+        assert_eq!(
+            c.db_path, "/tmp/uteke-web-iso-home/uteke-web.db",
+            "db_path must follow UTEKE_HOME"
+        );
+        assert_eq!(
+            c.audit_log_path, "/tmp/uteke-web-iso-home/uteke-web-audit.jsonl",
+            "audit_log_path must follow UTEKE_HOME"
+        );
+        unsafe {
+            std::env::remove_var("UTEKE_HOME");
         }
     }
 

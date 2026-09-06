@@ -49,9 +49,11 @@ upstream_token = ""
 jwt_secret = ""
 
 # Path SQLite DB untuk auth store (users, clients, tokens, sessions)
+# Default mengikuti uteke_home() (env UTEKE_HOME > ~/.codecora/uteke) —
+# tulis eksplisit hanya untuk override.
 db_path = "~/.codecora/uteke/uteke-web.db"
 
-# Audit trail JSONL path (default ON)
+# Audit trail JSONL path (default ON, ikut uteke_home() seperti db_path)
 audit_log_path = "~/.codecora/uteke/uteke-web-audit.jsonl"
 
 # Daily-rotated log files. Empty = stdout only.

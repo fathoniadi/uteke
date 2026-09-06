@@ -202,9 +202,18 @@ pub struct DashboardMemory {
     pub pinned: bool,
     pub created_at: String,
     pub namespace: String,
+    /// Whether this memory has been superseded by a newer one (supersession
+    /// workflow, uteke 0.15.0 #1069). Search surfaces filter these out;
+    /// the flag surfaces on direct get-by-id (detail view).
+    #[serde(skip_serializing_if = "is_false")]
+    pub deprecated: bool,
     /// Relevance score (only set for semantic/fts modes).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<f32>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl From<Memory> for DashboardMemory {
@@ -218,6 +227,7 @@ impl From<Memory> for DashboardMemory {
             pinned: m.pinned,
             created_at: m.created_at.to_rfc3339(),
             namespace: m.namespace,
+            deprecated: m.deprecated,
             score: None,
         }
     }
@@ -243,6 +253,9 @@ impl From<UnifiedSearchResult> for DashboardMemory {
             pinned: r.pinned.unwrap_or(false),
             created_at: r.created_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
             namespace: r.namespace.unwrap_or_else(|| DEFAULT_NAMESPACE.to_string()),
+            // UnifiedSearchResult carries no deprecated flag; the recall
+            // path filters superseded memories before they reach this shape.
+            deprecated: false,
             score: Some(r.score),
         }
     }
@@ -258,6 +271,23 @@ pub struct MemoryListResponse {
     pub mode: String,
 }
 
+/// Upstream `POST /list` response with `include_meta: true` (uteke 0.17.0
+/// #1188): `{memories, total, has_more, next_offset}` instead of the bare
+/// array. `total`/`next_offset` are not needed by the dashboard envelope.
+#[derive(Debug, Deserialize)]
+struct ListMetaEnvelope {
+    memories: Vec<Memory>,
+    has_more: bool,
+}
+
+/// Map an upstream JSON decode failure to a 500 response.
+fn bad_upstream(e: serde_json::Error) -> Response {
+    api_error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        &format!("upstream decode error: {e}"),
+    )
+}
+
 /// `GET /dashboard/api/memories` query params.
 #[derive(Debug, Deserialize)]
 pub struct MemoryQuery {
@@ -266,6 +296,12 @@ pub struct MemoryQuery {
     /// "semantic" | "fts" | "list" (default: list).
     #[serde(default)]
     pub mode: Option<String>,
+    /// Recall strategy override for semantic mode: "fusion" | "hybrid" |
+    /// "vector" | "fts5" | "graph". When absent, the upstream server default
+    /// applies (fusion since uteke 0.16.0, or `[recall] default_strategy`
+    /// in uteke.toml). Ignored for list/fts modes.
+    #[serde(default)]
+    pub strategy: Option<String>,
     #[serde(default)]
     pub tag: Option<String>,
     #[serde(default)]
@@ -500,14 +536,20 @@ pub async fn handle_list_memories(
 
     match mode.as_str() {
         "semantic" => {
-            // POST /recall {query, limit, search_type:"memory", strategy:"hybrid", tags?, namespace?}
+            // POST /recall {query, limit, search_type:"memory", strategy?, tags?, namespace?}
+            // `strategy` is omitted unless explicitly requested, so the
+            // upstream default applies (fusion since uteke 0.16.0 #1123, or
+            // `[recall] default_strategy` from uteke.toml) — keeping the
+            // dashboard in sync with CLI/MCP recall behavior.
             let fetch_limit = (offset + limit + 1).min(SEARCH_FETCH_CAP);
             let mut body = serde_json::json!({
                 "query": query,
                 "limit": fetch_limit,
                 "search_type": "memory",
-                "strategy": "hybrid",
             });
+            if let Some(s) = q.strategy.as_deref().filter(|s| !s.is_empty()) {
+                body["strategy"] = serde_json::json!(s);
+            }
             if let Some(t) = q.tag.as_deref().filter(|t| !t.is_empty()) {
                 body["tags"] = serde_json::json!([t]);
             }
@@ -579,10 +621,13 @@ pub async fn handle_list_memories(
         }
         // "list" (default)
         _ => {
-            // POST /list {limit, offset, tag?, namespace?}
+            // POST /list {limit, offset, tag?, namespace?, include_meta:true}
+            // include_meta (uteke 0.17.0 #1188) asks upstream for exact
+            // pagination metadata instead of guessing from page length.
             let mut body = serde_json::json!({
                 "limit": limit,
                 "offset": offset,
+                "include_meta": true,
             });
             if let Some(t) = q.tag.as_deref().filter(|t| !t.is_empty()) {
                 body["tag"] = serde_json::json!(t);
@@ -594,11 +639,27 @@ pub async fn handle_list_memories(
                 Ok(r) => r,
                 Err(e) => return upstream_err(e),
             };
-            let memories: Vec<Memory> = match parse_json(resp).await {
+            let val: serde_json::Value = match parse_json(resp).await {
                 Ok(v) => v,
                 Err(r) => return r,
             };
-            let has_more = memories.len() == limit;
+            // Upstream ≥ 0.17 answers with the {memories, has_more, …}
+            // envelope; older upstreams ignore include_meta and return the
+            // bare array — fall back to the page-length heuristic there.
+            let (memories, has_more): (Vec<Memory>, bool) = if val.is_array() {
+                match serde_json::from_value::<Vec<Memory>>(val) {
+                    Ok(memories) => {
+                        let has_more = memories.len() == limit;
+                        (memories, has_more)
+                    }
+                    Err(e) => return bad_upstream(e),
+                }
+            } else {
+                match serde_json::from_value::<ListMetaEnvelope>(val) {
+                    Ok(env) => (env.memories, env.has_more),
+                    Err(e) => return bad_upstream(e),
+                }
+            };
             let rows: Vec<DashboardMemory> =
                 memories.into_iter().map(DashboardMemory::from).collect();
             Json(MemoryListResponse {
@@ -2889,6 +2950,7 @@ mod tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "note".into(),
@@ -2898,6 +2960,7 @@ mod tests {
             slug: None,
             source: None,
             source_type: "user".into(),
+            author_type: "agent".into(),
         };
         let d = DashboardMemory::from(m);
         assert_eq!(d.id, "abc");
@@ -2919,6 +2982,7 @@ mod tests {
             access_count: 0,
             last_accessed: None,
             deprecated: false,
+            deprecated_at: None,
             valid_from: None,
             valid_until: None,
             memory_type: "fact".into(),
@@ -2928,6 +2992,7 @@ mod tests {
             slug: None,
             source: None,
             source_type: "user".into(),
+            author_type: "agent".into(),
         };
         let r = SearchResult {
             memory: m,

@@ -630,11 +630,7 @@ fn init_hermes(json: bool) -> Result<(), String> {
 ///   via the opt-in `import --extract` path,
 /// - it talks to the `uteke` binary directly (no `uteke-serve` daemon).
 ///
-<<<<<<< HEAD
-/// Templates live in `assets/hermes-memory-provider/` and are embedded at
-=======
 /// Templates live in `extensions/hermes-uteke-memory/` and are embedded at
->>>>>>> a2ec81a0915a242cee6e1de8811491e4fad1d4da
 /// build time so the generated plugin always matches the installed binary.
 fn init_hermes_memory_provider(json: bool) -> Result<(), String> {
     // Install to ~/.hermes/plugins/uteke/ (memory providers are keyed by name).

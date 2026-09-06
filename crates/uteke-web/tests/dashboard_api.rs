@@ -331,6 +331,166 @@ async fn fts_mode_returns_scored_rows() {
     assert_eq!(json["memories"][0]["score"], 0.9);
 }
 
+// ── Recall strategy passthrough + list pagination metadata ──────────────────
+
+/// Spawn a mock upstream whose `/recall` and `/list` handlers record the raw
+/// request body and reply with fixed payloads, so tests can assert on what
+/// the dashboard actually sent upstream.
+async fn spawn_capturing_upstream(
+    recall_resp: &'static str,
+    list_resp: &'static str,
+) -> (
+    std::net::SocketAddr,
+    std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+) {
+    use axum::routing::post;
+    use std::sync::{Arc, Mutex};
+
+    let recall_seen = Arc::new(Mutex::new(Vec::new()));
+    let list_seen = Arc::new(Mutex::new(Vec::new()));
+    let recall_capture = recall_seen.clone();
+    let list_capture = list_seen.clone();
+
+    let app = axum::Router::new()
+        .route(
+            "/recall",
+            post(move |b: String| {
+                recall_capture.lock().unwrap().push(b);
+                async move { (axum::http::StatusCode::OK, recall_resp.to_string()) }
+            }),
+        )
+        .route(
+            "/list",
+            post(move |b: String| {
+                list_capture.lock().unwrap().push(b);
+                async move { (axum::http::StatusCode::OK, list_resp.to_string()) }
+            }),
+        );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (addr, recall_seen, list_seen)
+}
+
+const RECALL_JSON: &str = r#"[{"result_type":"memory","score":0.5,"content":"hello world","memory_id":"m1","tags":["t1"],"memory_type":"note","importance":0.7,"pinned":false,"namespace":"default","created_at":"2026-01-01T00:00:00Z"}]"#;
+
+#[tokio::test]
+async fn semantic_mode_omits_strategy_by_default() {
+    let (upstream, recall_seen, _list_seen) = spawn_capturing_upstream(RECALL_JSON, "[]").await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/memories?mode=semantic&q=hello&limit=20")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bodies = recall_seen.lock().unwrap();
+    assert_eq!(bodies.len(), 1);
+    let body: serde_json::Value = serde_json::from_str(&bodies[0]).unwrap();
+    // No strategy field → upstream default applies (fusion since 0.16.0,
+    // or [recall] default_strategy from uteke.toml).
+    assert!(
+        body.get("strategy").is_none(),
+        "strategy must be omitted by default, got: {}",
+        bodies[0]
+    );
+}
+
+#[tokio::test]
+async fn semantic_mode_passes_strategy_through() {
+    let (upstream, recall_seen, _list_seen) = spawn_capturing_upstream(RECALL_JSON, "[]").await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/memories?mode=semantic&q=hello&strategy=graph&limit=20")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bodies = recall_seen.lock().unwrap();
+    assert_eq!(bodies.len(), 1);
+    let body: serde_json::Value = serde_json::from_str(&bodies[0]).unwrap();
+    assert_eq!(body["strategy"], "graph");
+}
+
+#[tokio::test]
+async fn list_mode_reads_has_more_from_include_meta_envelope() {
+    // One memory in the page (less than limit=20) but has_more=true —
+    // the old page-length heuristic would have reported has_more=false.
+    let list_resp: &'static str = r#"{"memories":[],"total":5,"has_more":true,"next_offset":40}"#;
+    let (upstream, _recall_seen, list_seen) =
+        spawn_capturing_upstream(RECALL_JSON, list_resp).await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/memories?mode=list&limit=20&offset=0")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert_eq!(json["has_more"], true);
+
+    // The dashboard must have requested the metadata envelope (#1188).
+    let bodies = list_seen.lock().unwrap();
+    assert_eq!(bodies.len(), 1);
+    let body: serde_json::Value = serde_json::from_str(&bodies[0]).unwrap();
+    assert_eq!(body["include_meta"], true);
+}
+
+#[tokio::test]
+async fn list_mode_falls_back_to_bare_array_from_older_upstream() {
+    // Older uteke-server (< 0.17) ignores include_meta and returns a bare
+    // array — has_more falls back to the page-length heuristic.
+    let list_resp: &'static str = r#"[{"id":"m1","content":"hello world","tags":["t1","t2"],"metadata":{},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","namespace":"default","memory_type":"note","importance":0.7,"pinned":true}]"#;
+    let (upstream, _recall_seen, _list_seen) =
+        spawn_capturing_upstream(RECALL_JSON, list_resp).await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/memories?mode=list&limit=20&offset=0")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert_eq!(json["memories"][0]["id"], "m1");
+    assert_eq!(json["has_more"], false);
+}
+
 #[tokio::test]
 async fn get_memory_returns_single_row() {
     let upstream = spawn_typed_upstream().await;
