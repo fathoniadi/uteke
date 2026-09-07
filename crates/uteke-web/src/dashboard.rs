@@ -64,6 +64,21 @@ pub fn dashboard_router() -> axum::Router<AppState> {
             "/dashboard/api/namespaces",
             get(dashboard_api::handle_namespaces),
         )
+        // Namespace management (#1181) — wrap upstream `/namespaces/rename`
+        // and `/namespaces/delete`.
+        .route(
+            "/dashboard/api/namespaces/rename",
+            post(dashboard_api::handle_namespace_rename),
+        )
+        .route(
+            "/dashboard/api/namespaces/{name}",
+            delete(dashboard_api::handle_namespace_delete),
+        )
+        // Maintenance — wrap upstream `POST /importance` (global recompute).
+        .route(
+            "/dashboard/api/importance",
+            post(dashboard_api::handle_recompute_importance),
+        )
         .route("/dashboard/api/stats", get(dashboard_api::handle_stats))
         .route("/dashboard/api/profile", get(dashboard_api::handle_profile))
         // Documents (PLAN-docs.md) — wrap upstream `/doc/*`.

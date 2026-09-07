@@ -82,8 +82,33 @@ async fn spawn_typed_upstream() -> std::net::SocketAddr {
             r#"[{"name":"t1","count":3},{"name":"t2","count":1}]"#.to_string(),
         )
     }
-    async fn namespaces() -> impl IntoResponse {
-        (StatusCode::OK, r#"["default","agent-a"]"#.to_string())
+    async fn namespaces(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
+        if q.get("with_counts").map(String::as_str) == Some("true") {
+            (
+                StatusCode::OK,
+                r#"[{"name":"default","count":5,"active":4,"deprecated":1},{"name":"agent-a","count":2,"active":2,"deprecated":0}]"#
+                    .to_string(),
+            )
+        } else {
+            (StatusCode::OK, r#"["default","agent-a"]"#.to_string())
+        }
+    }
+    // Echo the forwarded body back so tests can assert what the dashboard
+    // actually sent upstream, with the upstream result fields merged in.
+    async fn namespaces_rename(b: String) -> impl IntoResponse {
+        let mut v: serde_json::Value = serde_json::from_str(&b).unwrap_or_default();
+        v["moved"] = serde_json::json!(2);
+        v["target_existed"] = serde_json::json!(false);
+        (StatusCode::OK, v.to_string())
+    }
+    async fn namespaces_delete(b: String) -> impl IntoResponse {
+        let mut v: serde_json::Value = serde_json::from_str(&b).unwrap_or_default();
+        v["affected"] = serde_json::json!(3);
+        v["empty"] = serde_json::json!(false);
+        (StatusCode::OK, v.to_string())
+    }
+    async fn importance(_b: String) -> impl IntoResponse {
+        (StatusCode::OK, r#"{"updated":42}"#.to_string())
     }
     async fn stats(Query(_q): Query<HashMap<String, String>>) -> impl IntoResponse {
         (
@@ -147,6 +172,9 @@ async fn spawn_typed_upstream() -> std::net::SocketAddr {
         .route("/forget", delete(forget))
         .route("/tags", get(tags))
         .route("/namespaces", get(namespaces))
+        .route("/namespaces/rename", post(namespaces_rename))
+        .route("/namespaces/delete", post(namespaces_delete))
+        .route("/importance", post(importance))
         .route("/stats", get(stats))
         .route("/memory/feedback", post(memory_feedback))
         .route("/graph", get(graph))
@@ -1149,4 +1177,279 @@ async fn import_returns_counts() {
     let json = read_json(resp).await;
     assert_eq!(json["imported"], 1);
     assert_eq!(json["skipped"], 0);
+}
+
+// ── Namespace management tests (#1181) ──────────────────────────────────────
+
+#[tokio::test]
+async fn namespaces_counts_mode_returns_enriched_rows() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/api/namespaces?counts=true")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert!(json.is_array());
+    assert_eq!(json[0]["name"], "default");
+    assert_eq!(json[0]["count"], 5);
+    assert_eq!(json[0]["active"], 4);
+    assert_eq!(json[0]["deprecated"], 1);
+}
+
+#[tokio::test]
+async fn namespace_rename_requires_csrf() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/dashboard/api/namespaces/rename")
+                .header("cookie", &cookie)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"from":"old","to":"new"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn namespace_rename_forwards_body_and_returns_result() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/dashboard/api/namespaces/rename")
+                .header("cookie", &cookie)
+                .header("x-csrf-token", &csrf)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"from":"old","to":"new"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    // Echoed back by the mock — proves the dashboard forwarded {from, to}.
+    assert_eq!(json["from"], "old");
+    assert_eq!(json["to"], "new");
+    // Upstream result fields.
+    assert_eq!(json["moved"], 2);
+    assert_eq!(json["target_existed"], false);
+}
+
+#[tokio::test]
+async fn namespace_rename_rejects_empty_fields() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, csrf) = make_session(&app, "alice");
+    for body in [
+        r#"{"from":"","to":"new"}"#,
+        r#"{"from":"old","to":""}"#,
+        r#"{"from":"same","to":"same"}"#,
+    ] {
+        let resp = app
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/dashboard/api/namespaces/rename")
+                    .header("cookie", &cookie)
+                    .header("x-csrf-token", &csrf)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "body: {body}");
+    }
+}
+
+#[tokio::test]
+async fn namespace_delete_requires_csrf() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri("/dashboard/api/namespaces/old?strategy=deprecate")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn namespace_delete_forwards_strategy_and_target() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri("/dashboard/api/namespaces/old?strategy=merge&target=archive")
+                .header("cookie", &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    // Echoed back by the mock — proves name/strategy/target were forwarded.
+    assert_eq!(json["name"], "old");
+    assert_eq!(json["strategy"], "merge");
+    assert_eq!(json["target"], "archive");
+    assert_eq!(json["affected"], 3);
+}
+
+#[tokio::test]
+async fn namespace_delete_defaults_to_refuse() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri("/dashboard/api/namespaces/old")
+                .header("cookie", &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert_eq!(json["name"], "old");
+    assert_eq!(json["strategy"], "refuse");
+}
+
+#[tokio::test]
+async fn namespace_delete_merge_requires_target() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri("/dashboard/api/namespaces/old?strategy=merge")
+                .header("cookie", &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn namespace_delete_rejects_unknown_strategy() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri("/dashboard/api/namespaces/old?strategy=purge")
+                .header("cookie", &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+// ── Importance recompute tests ──────────────────────────────────────────────
+
+#[tokio::test]
+async fn importance_recompute_requires_csrf() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, _csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/dashboard/api/importance")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn importance_recompute_returns_updated_count() {
+    let upstream = spawn_typed_upstream().await;
+    let app = TestApp::with_upstream(upstream).await;
+    let (cookie, csrf) = make_session(&app, "alice");
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/dashboard/api/importance")
+                .header("cookie", &cookie)
+                .header("x-csrf-token", &csrf)
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert_eq!(json["updated"], 42);
 }

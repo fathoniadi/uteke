@@ -477,6 +477,7 @@ hr { border-color: var(--u-border); opacity: 0.5; }
     <li class="nav-item"><a class="nav-link" href="#/documents" data-page="documents"><i class="bi bi-file-earmark-text"></i> Documents</a></li>
     <li class="nav-item"><a class="nav-link" href="#/rooms" data-page="rooms"><i class="bi bi-chat-dots"></i> Rooms</a></li>
     <li class="nav-item"><a class="nav-link" href="#/graph" data-page="graph"><i class="bi bi-diagram-3"></i> Graph</a></li>
+    <li class="nav-item"><a class="nav-link" href="#/namespaces" data-page="namespaces"><i class="bi bi-stack"></i> Namespaces</a></li>
     <li class="nav-item"><a class="nav-link" href="#/settings" data-page="settings"><i class="bi bi-gear"></i> Settings</a></li>
   </ul>
   <!-- Theme switcher -->
@@ -841,6 +842,21 @@ hr { border-color: var(--u-border); opacity: 0.5; }
   </main>
 </div><!-- /page-graph -->
 
+<!-- ── Namespaces page (#1181) ────────────────────────────────────────────── -->
+<div id="page-namespaces" style="display:none;">
+  <main class="container-fluid py-3" style="max-width:1180px;">
+    <div class="d-flex align-items-center mb-3">
+      <h4 class="mb-0">Namespaces</h4>
+      <div class="ms-auto d-flex gap-2">
+        <button class="btn btn-sm btn-outline-warning" onclick="nsRecomputeImportance()" title="Recompute importance scores for all memories"><i class="bi bi-arrow-repeat"></i> Recompute importance</button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="nsLoad()" title="Refresh"><i class="bi bi-arrow-clockwise"></i></button>
+      </div>
+    </div>
+    <p class="text-muted small">Namespaces group memories for multi-agent isolation. Rename merges into an existing target; delete requires choosing what happens to its memories.</p>
+    <div class="card"><div class="card-body p-0"><div id="ns-body"></div></div></div>
+  </main>
+</div><!-- /page-namespaces -->
+
 <!-- ── Settings page ──────────────────────────────────────────────────────── -->
 <div id="page-settings" style="display:none;">
   <main class="container-fluid py-3" style="max-width:1180px;">
@@ -933,6 +949,56 @@ hr { border-color: var(--u-border); opacity: 0.5; }
       <div class="modal-footer">
         <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
         <button class="btn btn-primary" onclick="settingsSubmitPassword()"><i class="bi bi-save"></i> Change</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Namespace rename/merge modal -->
+<div class="modal fade" id="m-ns-rename" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Rename / merge namespace</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <div class="mb-3"><label class="form-label">Current name</label><input id="ns-rename-from" class="form-control" readonly></div>
+        <div class="mb-3"><label class="form-label">New name <span class="text-danger">*</span></label><input id="ns-rename-to" class="form-control" list="ns-list" placeholder="target namespace">
+          <div class="form-text">If the target already exists this becomes a merge — all memories move and the old name disappears.</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" onclick="nsSubmitRename()"><i class="bi bi-save"></i> Rename</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Namespace delete modal -->
+<div class="modal fade" id="m-ns-delete" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title text-danger"><i class="bi bi-exclamation-triangle"></i> Delete namespace?</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <p class="text-muted">Namespace <strong class="id-mono" id="ns-del-name"></strong> — choose what happens to its memories:</p>
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="radio" name="ns-del-strategy" id="ns-del-refuse" value="refuse" checked onchange="nsDeleteStrategyChange()">
+          <label class="form-check-label" for="ns-del-refuse"><strong>Refuse</strong> — fail while any memory still uses this name (safest)</label>
+        </div>
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="radio" name="ns-del-strategy" id="ns-del-merge" value="merge" onchange="nsDeleteStrategyChange()">
+          <label class="form-check-label" for="ns-del-merge"><strong>Merge</strong> — move all memories into another namespace</label>
+        </div>
+        <div class="mb-3 ms-4" id="ns-del-target-wrap" style="display:none;">
+          <input id="ns-del-target" class="form-control form-control-sm" list="ns-list" placeholder="target namespace">
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="radio" name="ns-del-strategy" id="ns-del-deprecate" value="deprecate" onchange="nsDeleteStrategyChange()">
+          <label class="form-check-label" for="ns-del-deprecate"><strong>Deprecate</strong> — soft-delete all memories (restorable, never hard-deleted)</label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-danger" onclick="nsSubmitDelete()"><i class="bi bi-trash"></i> Delete</button>
       </div>
     </div>
   </div>
@@ -1228,7 +1294,7 @@ function toast(msg){ $("toast-body").textContent = msg; bsModals.toast.show(); }
 
 // ── Bootstrap modal helpers ──────────────────────────────────────────────
 function initModals(){
-  ["m-detail","m-create","m-edit","m-forget","m-tag-rename","m-tag-delete","m-settings-client","m-settings-user","m-settings-password"].forEach(id => { bsModals[id] = new bootstrap.Modal(document.getElementById(id)); });
+  ["m-detail","m-create","m-edit","m-forget","m-tag-rename","m-tag-delete","m-settings-client","m-settings-user","m-settings-password","m-ns-rename","m-ns-delete"].forEach(id => { bsModals[id] = new bootstrap.Modal(document.getElementById(id)); });
   bsModals.toast = new bootstrap.Toast($("toast"), { delay: 1800 });
 }
 function openModal(id){ bsModals[id].show(); }
@@ -1271,7 +1337,10 @@ function makeChips(el, tags){
 async function api(path, opts){
   const res = await fetch(path, opts);
   if(!res.ok){
-    let detail = ""; try { detail = (await res.json()).detail || res.statusText; } catch(_){ detail = res.statusText; }
+    let detail = ""; try { const j = await res.json(); detail = j.detail || j.error || res.statusText; } catch(_){ detail = res.statusText; }
+    // Upstream errors arrive as JSON text inside `detail` — unwrap one level
+    // so toasts show the server's message, not a serialized body.
+    try { const inner = JSON.parse(detail); if(inner && inner.error) detail = inner.error; } catch(_){}
     throw new Error(detail || res.status);
   }
   return res.json();
@@ -1773,6 +1842,7 @@ function showPage(name){
   document.getElementById("page-docs").style.display = name === "documents" ? "" : "none";
   document.getElementById("page-rooms").style.display = name === "rooms" ? "" : "none";
   document.getElementById("page-graph").style.display = name === "graph" ? "" : "none";
+  document.getElementById("page-namespaces").style.display = name === "namespaces" ? "" : "none";
   document.getElementById("page-settings").style.display = name === "settings" ? "" : "none";
   document.querySelectorAll(".sidebar .nav-link").forEach(t => t.classList.toggle("active", t.dataset.page === name));
 }
@@ -1808,6 +1878,9 @@ function routeHash(){
   } else if(h.startsWith("/graph")){
     showPage("graph");
     graphLoad();
+  } else if(h.startsWith("/namespaces")){
+    showPage("namespaces");
+    nsLoad();
   } else if(h.startsWith("/settings")){
     showPage("settings");
     settingsLoad();
@@ -2837,6 +2910,102 @@ async function settingsRevokeToken(hash){
     toast("Token revoked");
     settingsLoadTokens();
   } catch(e){ toast("Revoke failed: "+e.message); }
+}
+
+// ── Namespaces page (#1181) ──────────────────────────────────────────────────
+let nsRows = [];
+let nsDeleteName = "";
+
+async function nsLoad(){
+  const body = $("ns-body");
+  try {
+    nsRows = (await apiGet("/dashboard/api/namespaces?counts=true")) || [];
+    if(!nsRows.length){ body.innerHTML = '<div class="text-muted small p-3">No namespaces.</div>'; return; }
+    body.innerHTML = `<div class="table-responsive"><table class="table table-sm mb-0">
+      <thead><tr><th>Namespace</th><th class="text-end">Total</th><th class="text-end">Active</th><th class="text-end">Deprecated</th><th></th></tr></thead>
+      <tbody>${nsRows.map(n => `<tr>
+        <td class="id-mono">${esc(n.name)}</td>
+        <td class="text-end">${n.count ?? 0}</td>
+        <td class="text-end"><span class="badge bg-success bg-opacity-25 text-success">${n.active ?? 0}</span></td>
+        <td class="text-end">${n.deprecated ? `<span class="badge bg-warning bg-opacity-25 text-warning">${n.deprecated}</span>` : "0"}</td>
+        <td class="text-end text-nowrap">
+          <button class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="nsView('${esc(n.name)}')" title="View memories in this namespace"><i class="bi bi-eye"></i></button>
+          <button class="btn btn-sm btn-outline-secondary py-0 px-1 ms-1" onclick="nsOpenRename('${esc(n.name)}')" title="Rename / merge"><i class="bi bi-pencil"></i></button>
+          <button class="btn btn-sm btn-outline-danger py-0 px-1 ms-1" onclick="nsOpenDelete('${esc(n.name)}')" title="Delete"><i class="bi bi-trash"></i></button>
+        </td>
+      </tr>`).join("")}</tbody>
+    </table></div>`;
+  } catch(e){ body.innerHTML = `<div class="text-danger small p-3">Failed: ${esc(e.message)}</div>`; }
+}
+
+// Jump to the memories list filtered to this namespace.
+function nsView(name){
+  S.ns = name; S.offset = 0;
+  $("ns").value = name;
+  if(window.location.hash !== "#/memories") window.location.hash = "#/memories";
+  load(); loadStats(); loadTags();
+}
+
+function nsOpenRename(name){
+  $("ns-rename-from").value = name;
+  $("ns-rename-to").value = "";
+  bsModals["m-ns-rename"].show();
+}
+async function nsSubmitRename(){
+  const from = $("ns-rename-from").value;
+  const to = $("ns-rename-to").value.trim();
+  if(!to){ toast("New name required"); return; }
+  if(to === from){ toast("New name must differ from current"); return; }
+  try {
+    const r = await apiMutate("/dashboard/api/namespaces/rename", "POST", { from, to });
+    bsModals["m-ns-rename"].hide();
+    toast(r.target_existed
+      ? `Merged "${from}" into "${to}" (${r.moved} memories)`
+      : `Renamed "${from}" → "${to}" (${r.moved} memories)`);
+    if(S.ns === from) S.ns = to;
+    nsLoad(); loadNamespaces(); loadStats();
+  } catch(e){ toast("Rename failed: "+e.message); }
+}
+
+function nsDeleteStrategyChange(){
+  const strategy = document.querySelector('input[name="ns-del-strategy"]:checked')?.value;
+  $("ns-del-target-wrap").style.display = strategy === "merge" ? "" : "none";
+}
+function nsOpenDelete(name){
+  nsDeleteName = name;
+  $("ns-del-name").textContent = name;
+  $("ns-del-target").value = "";
+  document.getElementById("ns-del-refuse").checked = true;
+  nsDeleteStrategyChange();
+  bsModals["m-ns-delete"].show();
+}
+async function nsSubmitDelete(){
+  const strategy = document.querySelector('input[name="ns-del-strategy"]:checked')?.value || "refuse";
+  const params = new URLSearchParams({ strategy });
+  if(strategy === "merge"){
+    const target = $("ns-del-target").value.trim();
+    if(!target){ toast("Target namespace required for merge"); return; }
+    params.set("target", target);
+  }
+  try {
+    const r = await apiMutate("/dashboard/api/namespaces/"+encodeURIComponent(nsDeleteName)+"?"+params.toString(), "DELETE");
+    bsModals["m-ns-delete"].hide();
+    toast(strategy === "deprecate"
+      ? `Soft-deleted ${r.affected ?? 0} memories in "${nsDeleteName}"`
+      : strategy === "merge"
+        ? `Moved ${r.affected ?? 0} memories to "${params.get("target")}"`
+        : `Namespace "${nsDeleteName}" deleted`);
+    if(S.ns === nsDeleteName) S.ns = "";
+    nsLoad(); loadNamespaces(); loadStats();
+  } catch(e){ toast("Delete failed: "+e.message); }
+}
+
+async function nsRecomputeImportance(){
+  if(!confirm("Recompute importance scores for ALL memories? This can take a while on large stores.")) return;
+  try {
+    const r = await apiMutate("/dashboard/api/importance", "POST", {});
+    toast(`Recomputed importance for ${r.updated ?? 0} memories`);
+  } catch(e){ toast("Recompute failed: "+e.message); }
 }
 
 routeHash();

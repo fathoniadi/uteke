@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **uteke-web Namespaces page (#1181)** — a dedicated dashboard page exposes the namespace management API: `GET /dashboard/api/namespaces?counts=true` returns the lifecycle-enriched rows (`{name, count, active, deprecated}` — the bare `Vec<String>` mode is unchanged for filter dropdowns), `POST /dashboard/api/namespaces/rename` wraps `/namespaces/rename` (existing target = merge), `DELETE /dashboard/api/namespaces/{name}?strategy=&target=` wraps `/namespaces/delete` with a strategy picker (refuse/merge/deprecate) in the UI, and `POST /dashboard/api/importance` wraps the global importance recompute. The SPA gained a sidebar entry, a namespaces table with active/deprecated counts, rename/merge and delete modals, and a "Recompute importance" action. Upstream `{"error": …}` bodies are now unwrapped one level so toasts show the server's message instead of a serialized JSON payload.
+
 ### Fixed
 
 - **CLI recall with the default fusion strategy returned an empty set** — the CLI resolved `min_score` from config (default 0.3) before considering the strategy, and fusion/hybrid/graph score on the RRF scale (typically 0.02–0.2), not cosine similarity — so the default threshold filtered everything. The CLI now defaults to 0.0 for rank-based strategies (matching the HTTP server's `DEFAULT_MIN_SCORE`); explicit `--min`/`--strict` are honored verbatim on every strategy. Also fixed the stale "Valid options" error message that omitted `fusion`. Note: this bug is present in upstream 0.17.0 as well (its fusion tests are `#[ignore]`d and pass `min_score: 0.0` explicitly) — surfaced by a full functional smoke test of every surface (CLI/MCP/HTTP/web).

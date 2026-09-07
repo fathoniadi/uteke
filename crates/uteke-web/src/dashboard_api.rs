@@ -1045,8 +1045,24 @@ pub async fn handle_tags(
     Json(tags).into_response()
 }
 
+/// `GET /dashboard/api/namespaces` query params.
+#[derive(Debug, Deserialize)]
+pub struct NamespacesQuery {
+    /// When true, forward `?with_counts=true` upstream (#1181) and return the
+    /// `{name, count, active, deprecated}` rows instead of the bare name list.
+    #[serde(default)]
+    pub counts: bool,
+}
+
 /// `GET /dashboard/api/namespaces` — namespace list.
-pub async fn handle_namespaces(State(state): State<AppState>, headers: HeaderMap) -> Response {
+/// `?counts=true` returns the lifecycle-enriched rows (used by the
+/// Namespaces page); the default stays a bare `Vec<String>` for the filter
+/// dropdowns.
+pub async fn handle_namespaces(
+    State(state): State<AppState>,
+    Query(q): Query<NamespacesQuery>,
+    headers: HeaderMap,
+) -> Response {
     if !state.config.dashboard.enabled {
         return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
     }
@@ -1055,15 +1071,177 @@ pub async fn handle_namespaces(State(state): State<AppState>, headers: HeaderMap
         Err(r) => return r,
     };
     let client = UtekeClient::new(&state);
-    let resp = match client.get("/namespaces").await {
+    let path = if q.counts {
+        "/namespaces?with_counts=true"
+    } else {
+        "/namespaces"
+    };
+    let resp = match client.get(path).await {
         Ok(r) => r,
         Err(e) => return upstream_err(e),
     };
+    if q.counts {
+        // Pass the upstream row objects through untouched.
+        let val: serde_json::Value = match parse_json(resp).await {
+            Ok(v) => v,
+            Err(r) => return r,
+        };
+        return Json(val).into_response();
+    }
     let ns: Vec<String> = match parse_json(resp).await {
         Ok(v) => v,
         Err(r) => return r,
     };
     Json(ns).into_response()
+}
+
+/// `POST /dashboard/api/namespaces/rename` body.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct NamespaceRenameRequest {
+    /// Current namespace name.
+    pub from: String,
+    /// New namespace name — an existing target means merge (#1181).
+    pub to: String,
+}
+
+/// `POST /dashboard/api/namespaces/rename` — rename a namespace, merging into
+/// the target when it already exists. Wraps upstream `POST /namespaces/rename`.
+/// Requires session + CSRF.
+pub async fn handle_namespace_rename(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let req: NamespaceRenameRequest = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return api_error(StatusCode::BAD_REQUEST, &format!("invalid body: {e}")),
+    };
+    if req.from.trim().is_empty() || req.to.trim().is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "from and to must not be empty");
+    }
+    if req.from == req.to {
+        return api_error(StatusCode::BAD_REQUEST, "from and to must differ");
+    }
+    let client = UtekeClient::new(&state);
+    let resp = match client.post("/namespaces/rename", &req).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+/// `DELETE /dashboard/api/namespaces/{name}` query params.
+#[derive(Debug, Deserialize)]
+pub struct NamespaceDeleteQuery {
+    /// What happens to the namespace's memories: `refuse` (default — 409
+    /// while any memory references the name), `merge` (move all memories to
+    /// `target`), or `deprecate` (soft-delete — restorable, never hard-deleted).
+    #[serde(default = "default_ns_delete_strategy")]
+    pub strategy: String,
+    /// Target namespace when strategy is `merge`.
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
+fn default_ns_delete_strategy() -> String {
+    "refuse".to_string()
+}
+
+/// `DELETE /dashboard/api/namespaces/{name}` — delete a namespace with an
+/// explicit strategy for its memories. Wraps upstream `POST /namespaces/delete`
+/// (RESTful → POST translator). Requires session + CSRF.
+pub async fn handle_namespace_delete(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Query(q): Query<NamespaceDeleteQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    if name.trim().is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "namespace name must not be empty");
+    }
+    match q.strategy.as_str() {
+        "refuse" | "merge" | "deprecate" => {}
+        other => {
+            return api_error(
+                StatusCode::BAD_REQUEST,
+                &format!("unknown strategy '{other}' — use refuse, merge, or deprecate"),
+            );
+        }
+    }
+    if q.strategy == "merge" && q.target.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "strategy=merge requires a 'target' namespace",
+        );
+    }
+    let payload = serde_json::json!({
+        "name": name,
+        "strategy": q.strategy,
+        "target": q.target,
+    });
+    let client = UtekeClient::new(&state);
+    let resp = match client.post("/namespaces/delete", &payload).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
+}
+
+/// `POST /dashboard/api/importance` — recompute importance scores for all
+/// memories. Wraps upstream `POST /importance` (global — the upstream
+/// `namespace` field is currently a no-op). Requires session + CSRF.
+pub async fn handle_recompute_importance(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.config.dashboard.enabled {
+        return api_error(StatusCode::NOT_FOUND, "dashboard disabled");
+    }
+    let sess = match require_session(&state, &headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(r) = require_csrf(&sess, &headers) {
+        return r;
+    }
+    let client = UtekeClient::new(&state);
+    let resp = match client.post("/importance", &serde_json::json!({})).await {
+        Ok(r) => r,
+        Err(e) => return upstream_err(e),
+    };
+    let val: serde_json::Value = match parse_json(resp).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(val).into_response()
 }
 
 /// `GET /dashboard/api/stats` — store stats (optionally scoped to a namespace).
