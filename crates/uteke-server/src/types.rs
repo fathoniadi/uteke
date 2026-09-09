@@ -455,6 +455,12 @@ pub struct RecallFileSection {
     /// One of: vector | fts5 | hybrid | graph | fusion. Server-side default:
     /// fusion (#1123).
     pub default_strategy: Option<String>,
+    /// Salience boost weight applied to recall scores. `None` → fall back to
+    /// `SalienceRecencyConfig::default()` (0.1), matching CLI behavior.
+    pub salience_weight: Option<f32>,
+    /// Recency boost weight applied to recall scores. `None` → fall back to
+    /// `SalienceRecencyConfig::default()` (0.1), matching CLI behavior.
+    pub recency_weight: Option<f32>,
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────

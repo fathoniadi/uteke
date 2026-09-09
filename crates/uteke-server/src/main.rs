@@ -303,6 +303,28 @@ fn main() {
                         .unwrap_or(defaults.max_deprecate_percent),
                 );
             }
+
+            // Apply salience/recency boost weights from uteke.toml [recall]
+            // section (#352/#721). Server previously ignored these two keys —
+            // RecallFileSection only carried min_score / min_score_strict /
+            // default_strategy — so boost weights always fell back to the 0.1
+            // default regardless of what uteke.toml declared. Wire them through
+            // now so the config value (e.g. 0.15 written by `uteke onboard`)
+            // actually takes effect on the server recall path.
+            if let Some(ref rc) = config.recall {
+                let defaults = uteke_core::SalienceRecencyConfig::default();
+                if rc.salience_weight.is_some() || rc.recency_weight.is_some() {
+                    u.set_salience_recency_config(uteke_core::SalienceRecencyConfig {
+                        salience_weight: rc.salience_weight.unwrap_or(defaults.salience_weight),
+                        recency_weight: rc.recency_weight.unwrap_or(defaults.recency_weight),
+                    });
+                    info!(
+                        "Recall boost config loaded: salience={}, recency={}",
+                        rc.salience_weight.unwrap_or(defaults.salience_weight),
+                        rc.recency_weight.unwrap_or(defaults.recency_weight),
+                    );
+                }
+            }
             Arc::new(Mutex::new(u))
         }
         Err(e) => {
