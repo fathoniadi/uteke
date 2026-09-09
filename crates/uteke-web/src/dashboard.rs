@@ -294,6 +294,14 @@ pub async fn dashboard_callback(
   [data-theme="warm"][data-mode="dark"] {{ --u-accent:#fbbf24; --u-bg:#1c1917; --u-surface:#292524; --u-border:#44403c; --u-text:#e7e5e4; --u-text-muted:#a8a29e; --u-danger:#f87171; }}
   [data-theme="mono"] {{ --u-accent:#171717; --u-bg:#fff; --u-surface:#f5f5f5; --u-border:#e5e5e5; --u-text:#171717; --u-text-muted:#737373; --u-danger:#dc2626; }}
   [data-theme="mono"][data-mode="dark"] {{ --u-accent:#fafafa; --u-bg:#0a0a0a; --u-surface:#171717; --u-border:#262626; --u-text:#fafafa; --u-text-muted:#a3a3a3; --u-danger:#f87171; }}
+  [data-theme="rose"] {{ --u-accent:#e11d48; --u-bg:#fff; --u-surface:#fff1f2; --u-border:#fecdd3; --u-text:#1f2937; --u-text-muted:#64748b; --u-danger:#dc2626; }}
+  [data-theme="rose"][data-mode="dark"] {{ --u-accent:#fb7185; --u-bg:#0c0a0c; --u-surface:#1a1014; --u-border:#2a1820; --u-text:#e2e8f0; --u-text-muted:#94a3b8; --u-danger:#f87171; }}
+  [data-theme="emerald"] {{ --u-accent:#059669; --u-bg:#fff; --u-surface:#f0fdf4; --u-border:#bbf7d0; --u-text:#1f2937; --u-text-muted:#64748b; --u-danger:#dc2626; }}
+  [data-theme="emerald"][data-mode="dark"] {{ --u-accent:#34d399; --u-bg:#0a0f0d; --u-surface:#0f1a14; --u-border:#1a2a20; --u-text:#e2e8f0; --u-text-muted:#94a3b8; --u-danger:#f87171; }}
+  [data-theme="sky"] {{ --u-accent:#0284c7; --u-bg:#fff; --u-surface:#f0f9ff; --u-border:#bae6fd; --u-text:#1f2937; --u-text-muted:#64748b; --u-danger:#dc2626; }}
+  [data-theme="sky"][data-mode="dark"] {{ --u-accent:#38bdf8; --u-bg:#0a0f14; --u-surface:#0f1822; --u-border:#1a2636; --u-text:#e2e8f0; --u-text-muted:#94a3b8; --u-danger:#f87171; }}
+  [data-theme="violet"] {{ --u-accent:#7c3aed; --u-bg:#fff; --u-surface:#f5f3ff; --u-border:#ddd6fe; --u-text:#1f2937; --u-text-muted:#64748b; --u-danger:#dc2626; }}
+  [data-theme="violet"][data-mode="dark"] {{ --u-accent:#a78bfa; --u-bg:#0c0a14; --u-surface:#15122a; --u-border:#211e3a; --u-text:#e2e8f0; --u-text-muted:#94a3b8; --u-danger:#f87171; }}
   * {{ box-shadow: none !important; }}
   body {{ background: var(--u-bg); color: var(--u-text); }}
   .card {{ background: var(--u-surface); border: 1px solid var(--u-border); border-radius: 4px; }}
@@ -307,12 +315,15 @@ pub async fn dashboard_callback(
   (function() {{
     try {{
       var t = localStorage.getItem("uteke_theme") || "indigo";
-      var m = localStorage.getItem("uteke_mode") || "light";
+      var m = localStorage.getItem("uteke_mode");
+      if(!m) {{ m = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; }}
       document.documentElement.setAttribute("data-theme", t);
       document.documentElement.setAttribute("data-mode", m);
+      document.documentElement.setAttribute("data-bs-theme", m);
     }} catch(e) {{
       document.documentElement.setAttribute("data-theme", "indigo");
       document.documentElement.setAttribute("data-mode", "light");
+      document.documentElement.setAttribute("data-bs-theme", "light");
     }}
   }})();
 </script>

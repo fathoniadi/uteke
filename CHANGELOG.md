@@ -4,7 +4,13 @@
 
 ### Added
 
+- **uteke-web dashboard: 4 new color themes + system dark mode** — the dashboard theme switcher grew from 4 to 8 themes (added rose, emerald, sky, violet — each with light and dark variants). On first visit, dark/light mode now follows the OS `prefers-color-scheme` preference; the toggle still overrides and persists in localStorage as before.
+
 - **uteke-web Namespaces page (#1181)** — a dedicated dashboard page exposes the namespace management API: `GET /dashboard/api/namespaces?counts=true` returns the lifecycle-enriched rows (`{name, count, active, deprecated}` — the bare `Vec<String>` mode is unchanged for filter dropdowns), `POST /dashboard/api/namespaces/rename` wraps `/namespaces/rename` (existing target = merge), `DELETE /dashboard/api/namespaces/{name}?strategy=&target=` wraps `/namespaces/delete` with a strategy picker (refuse/merge/deprecate) in the UI, and `POST /dashboard/api/importance` wraps the global importance recompute. The SPA gained a sidebar entry, a namespaces table with active/deprecated counts, rename/merge and delete modals, and a "Recompute importance" action. Upstream `{"error": …}` bodies are now unwrapped one level so toasts show the server's message instead of a serialized JSON payload.
+
+### Fixed
+
+- **uteke-web: dark mode left Bootstrap components invisible** — the dashboard's custom theme system set only `data-mode="dark"` (a custom attribute) but not Bootstrap 5.3's `data-bs-theme="dark"`, so `.btn-close` (the X icon in all 18 modal headers) and `.form-select` dropdown arrows stayed black-on-dark = invisible. The theme system now sets `data-bs-theme` alongside `data-mode` in both the SPA `applyMode()` and the inline anti-FOUC script in `dashboard.rs`, so Bootstrap's dark-mode component variants activate correctly. The flat-design CSS variable overrides (`:root` → `var(--u-*)`) still win for backgrounds/text/borders, so the only visible change is the previously-broken icons becoming visible.
 
 ### Fixed
 
