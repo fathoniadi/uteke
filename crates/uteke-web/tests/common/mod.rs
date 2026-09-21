@@ -12,6 +12,10 @@ use uteke_web::state::AppState;
 pub struct TestApp {
     pub router: axum::Router,
     pub state: AppState,
+    /// Path the audit log actually writes to, so tests can assert on it.
+    /// Only some test binaries read this.
+    #[allow(dead_code)]
+    pub audit_path: std::path::PathBuf,
 }
 
 impl TestApp {
@@ -33,13 +37,18 @@ impl TestApp {
             upstream_token: "test-upstream-token".to_string(),
             issuer: "http://localhost:8768".to_string(),
             listen: "127.0.0.1:0".to_string(),
+            audit_log_path: audit_path.to_string_lossy().to_string(),
             ..WebConfig::default()
         };
         config.expand_paths();
 
         let state = AppState::new(config, store, audit);
         let router = app::build_app(state.clone());
-        Self { router, state }
+        Self {
+            router,
+            state,
+            audit_path,
+        }
     }
 
     /// Build a test app whose upstream points at a real mock server.
@@ -58,13 +67,18 @@ impl TestApp {
             upstream_token: "test-upstream-token".to_string(),
             issuer: "http://localhost:8768".to_string(),
             listen: "127.0.0.1:0".to_string(),
+            audit_log_path: audit_path.to_string_lossy().to_string(),
             ..WebConfig::default()
         };
         config.expand_paths();
 
         let state = AppState::new(config, store, audit);
         let router = app::build_app(state.clone());
-        Self { router, state }
+        Self {
+            router,
+            state,
+            audit_path,
+        }
     }
 }
 

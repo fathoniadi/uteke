@@ -36,6 +36,11 @@ pub fn build_app(state: AppState) -> Router {
         .route("/oauth2/login", post(oauth::login))
         .route("/oauth2/token", post(oauth::token))
         .route("/oauth2/register", post(oauth::register))
+        // Some clients advertise dynamic registration at the bare path
+        // instead of the metadata ``registration_endpoint``. Unrouted it
+        // fell through to the proxy catch-all and answered 401, which
+        // aborts registration before the client ever tries the real path.
+        .route("/register", post(oauth::register))
         .route("/oauth2/revoke", post(oauth::revoke))
         .route("/oauth2/introspect", post(oauth::introspect))
         // Well-known
@@ -44,6 +49,23 @@ pub fn build_app(state: AppState) -> Router {
             get(oauth::metadata),
         )
         .route("/.well-known/jwks-uri", get(oauth::jwks))
+        // OIDC-style discovery alias. Clients that probe this before the
+        // RFC 8414 document used to get a 401 from the proxy catch-all.
+        .route(
+            "/.well-known/openid-configuration",
+            get(oauth::openid_configuration),
+        )
+        // RFC 9728 resource metadata. Registered *before* the proxy
+        // catch-all: MCP clients fetch this after a 401 to discover the
+        // authorization server, so it must answer without a Bearer token.
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(oauth::protected_resource_metadata),
+        )
+        .route(
+            "/.well-known/oauth-protected-resource/{*rest}",
+            get(oauth::protected_resource_metadata),
+        )
         // Profile + health
         .route("/profile", get(oauth::profile))
         .route("/healthz", get(oauth::healthz))

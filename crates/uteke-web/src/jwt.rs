@@ -20,11 +20,16 @@ pub struct AccessClaims {
 }
 
 /// Mint a new HS256 access token.
+///
+/// `audience` is the RFC 8707 resource the token is bound to (normally the
+/// canonical MCP server URL). MCP clients validate `aud` against the resource
+/// they asked for, so it must not be the `client_id`.
 pub fn mint_access_token(
     secret: &str,
     issuer: &str,
     username: &str,
     client_id: &str,
+    audience: &str,
     scope: &str,
     ttl_seconds: i64,
 ) -> Result<(String, String), JwtError> {
@@ -33,7 +38,7 @@ pub fn mint_access_token(
     let claims = AccessClaims {
         iss: issuer.to_string(),
         sub: username.to_string(),
-        aud: client_id.to_string(),
+        aud: audience.to_string(),
         client_id: client_id.to_string(),
         scope: scope.to_string(),
         iat: now,
@@ -49,8 +54,9 @@ pub fn mint_access_token(
 /// Verify an HS256 access token. Returns the claims on success.
 ///
 /// Validates `exp` (no leeway) and `iss` (must match `expected_iss`).
-/// `aud` is **not** validated — it carries the `client_id` and varies per
-/// token; the resource server authorizes via `scope`, not `aud`.
+/// `aud` is **not** validated — it carries the RFC 8707 resource the token was
+/// issued for and varies per request; the resource server authorizes via
+/// `scope`, not `aud`. MCP *clients* are the ones that check `aud`.
 pub fn verify_access_token(
     secret: &str,
     expected_iss: &str,
@@ -86,6 +92,7 @@ mod tests {
             "http://issuer",
             "alice",
             "client1",
+            "https://mcp.example.com/mcp",
             "read write",
             3600,
         )
@@ -95,6 +102,7 @@ mod tests {
         let claims = verify_access_token(&secret, "http://issuer", &token).expect("verify");
         assert_eq!(claims.sub, "alice");
         assert_eq!(claims.client_id, "client1");
+        assert_eq!(claims.aud, "https://mcp.example.com/mcp");
         assert_eq!(claims.scope, "read write");
         assert_eq!(claims.iss, "http://issuer");
     }
@@ -102,25 +110,48 @@ mod tests {
     #[test]
     fn verify_rejects_wrong_secret() {
         let secret = "a".repeat(64);
-        let (token, _) =
-            mint_access_token(&secret, "iss", "alice", "c", "read", 3600).expect("mint");
+        let (token, _) = mint_access_token(
+            &secret,
+            "iss",
+            "alice",
+            "c",
+            "https://res/mcp",
+            "read",
+            3600,
+        )
+        .expect("mint");
         assert!(verify_access_token("wrong-secret", "iss", &token).is_err());
     }
 
     #[test]
     fn verify_rejects_expired() {
         let secret = "a".repeat(64);
-        let (token, _) =
-            mint_access_token(&secret, "iss", "alice", "c", "read", -120).expect("mint");
+        let (token, _) = mint_access_token(
+            &secret,
+            "iss",
+            "alice",
+            "c",
+            "https://res/mcp",
+            "read",
+            -120,
+        )
+        .expect("mint");
         assert!(verify_access_token(&secret, "iss", &token).is_err());
     }
 
     #[test]
     fn verify_rejects_wrong_issuer() {
         let secret = "a".repeat(64);
-        let (token, _) =
-            mint_access_token(&secret, "http://real-issuer", "alice", "c", "read", 3600)
-                .expect("mint");
+        let (token, _) = mint_access_token(
+            &secret,
+            "http://real-issuer",
+            "alice",
+            "c",
+            "https://res/mcp",
+            "read",
+            3600,
+        )
+        .expect("mint");
         assert!(verify_access_token(&secret, "http://fake-issuer", &token).is_err());
     }
 }

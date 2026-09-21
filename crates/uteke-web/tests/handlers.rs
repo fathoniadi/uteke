@@ -61,6 +61,52 @@ async fn metadata_returns_oauth2_endpoints() {
 }
 
 #[tokio::test]
+async fn openid_configuration_alias_returns_metadata() {
+    let app = TestApp::new().await;
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/.well-known/openid-configuration")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // Must be served locally: falling through to the proxy gives 401.
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["issuer"], "http://localhost:8768");
+    assert_eq!(
+        json["authorization_endpoint"],
+        "http://localhost:8768/oauth2/auth"
+    );
+    // OIDC clients require these companions.
+    assert_eq!(json["subject_types_supported"][0], "public");
+    assert_eq!(json["id_token_signing_alg_values_supported"][0], "HS256");
+}
+
+#[tokio::test]
+async fn unknown_well_known_path_returns_404_not_401() {
+    let app = TestApp::new().await;
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/.well-known/definitely-not-a-real-document")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // 401 misleads discovery clients into believing auth would help.
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn jwks_returns_empty_keys() {
     let app = TestApp::new().await;
     let resp = app
@@ -129,6 +175,7 @@ async fn profile_with_valid_jwt_returns_identity() {
         &app.state.config.issuer,
         "alice",
         "test-client",
+        "https://test.example/mcp",
         "read write",
         3600,
     )
@@ -561,6 +608,30 @@ async fn register_public_client_no_secret() {
 }
 
 #[tokio::test]
+async fn bare_register_path_creates_client() {
+    let app = TestApp::new().await;
+    let body = r#"{"redirect_uris":["http://localhost/cb"],"scope":"read write"}"#;
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/register")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // Some clients use the bare path; it must register, not 401 at the proxy.
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["client_id"].as_str().unwrap().len() > 10);
+}
+
+#[tokio::test]
 async fn register_without_redirect_uris_returns_400() {
     let app = TestApp::new().await;
     let resp = app
@@ -651,6 +722,7 @@ async fn introspect_active_access_token() {
         &app.state.config.issuer,
         "alice",
         "cid",
+        "https://test.example/mcp",
         "read",
         3600,
     )
@@ -684,6 +756,7 @@ async fn introspect_without_client_auth_returns_401() {
         &app.state.config.issuer,
         "alice",
         "cid",
+        "https://test.example/mcp",
         "read",
         3600,
     )
@@ -785,6 +858,7 @@ async fn proxy_write_scope_enforced() {
         &app.state.config.issuer,
         "alice",
         "cid",
+        "https://test.example/mcp",
         "read",
         3600,
     )
@@ -814,6 +888,7 @@ async fn proxy_admin_scope_for_delete() {
         &app.state.config.issuer,
         "alice",
         "cid",
+        "https://test.example/mcp",
         "read write",
         3600,
     )
@@ -1119,6 +1194,7 @@ async fn proxy_forwards_get_to_upstream() {
         &app.state.config.issuer,
         "alice",
         "cid",
+        "https://test.example/mcp",
         "read",
         3600,
     )
@@ -1151,6 +1227,7 @@ async fn proxy_forwards_post_with_write_scope() {
         &app.state.config.issuer,
         "alice",
         "cid",
+        "https://test.example/mcp",
         "read write",
         3600,
     )
@@ -1201,6 +1278,7 @@ async fn proxy_strips_cors_headers_from_upstream() {
         &app.state.config.issuer,
         "alice",
         "cid",
+        "https://test.example/mcp",
         "read",
         3600,
     )

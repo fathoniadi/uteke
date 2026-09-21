@@ -104,12 +104,23 @@ pub fn handle_jsonrpc(uteke: &Uteke, raw: &str) -> Option<String> {
             if is_notification {
                 None
             } else {
+                // JSON-RPC 2.0 §5.1: an unimplemented method is -32601
+                // (Method not found), not -32603 (Internal error). MCP
+                // clients treat -32603 as a broken server and abort the
+                // connector; -32601 tells them the capability is absent,
+                // which is the correct signal since `initialize` only
+                // advertises `tools`.
+                let code = if msg.starts_with("Unknown method:") {
+                    -32601
+                } else {
+                    -32603
+                };
                 Some(
                     serde_json::to_string(&JsonRpcResponse::Error {
                         jsonrpc: "2.0",
                         id,
                         error: JsonRpcError {
-                            code: -32603,
+                            code,
                             message: msg,
                         },
                     })

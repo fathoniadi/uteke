@@ -18,7 +18,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Json, Redirect, Response};
 use serde::{Deserialize, Serialize};
 
-use crate::auth_store::{AuthError, AuthStore};
+use crate::auth_store::{AuthError, AuthStore, Client};
 use crate::jwt;
 use crate::pkce;
 use crate::state::AppState;
@@ -48,6 +48,10 @@ pub struct AuthorizeParams {
     pub code_challenge: Option<String>,
     pub code_challenge_method: Option<String>,
     pub nonce: Option<String>,
+    /// RFC 8707 resource indicator: the canonical MCP server URL the client
+    /// intends to call. Claude.ai sends this and then audience-checks the
+    /// access token against it.
+    pub resource: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,6 +66,9 @@ pub struct LoginForm {
     pub code_challenge: String,
     pub code_challenge_method: String,
     pub nonce: String,
+    // RFC 8707 resource indicator, round-tripped so it survives the login POST.
+    #[serde(default)]
+    pub resource: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,6 +81,8 @@ pub struct TokenRequest {
     pub refresh_token: Option<String>,
     pub code_verifier: Option<String>,
     pub scope: Option<String>,
+    /// RFC 8707 resource indicator, sent again on the token request.
+    pub resource: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -120,7 +129,7 @@ pub struct ErrorResponse {
 ///
 /// TODO: use axum `ConnectInfo<SocketAddr>` to get the real peer IP and
 /// check it against `trusted_proxies` before trusting XFF.
-fn client_ip(headers: &HeaderMap, trusted_proxies: &[String]) -> String {
+pub(crate) fn client_ip(headers: &HeaderMap, trusted_proxies: &[String]) -> String {
     if !trusted_proxies.is_empty() {
         if let Some(xff) = headers.get("x-forwarded-for") {
             if let Ok(s) = xff.to_str() {
@@ -129,6 +138,29 @@ fn client_ip(headers: &HeaderMap, trusted_proxies: &[String]) -> String {
         }
     }
     "unknown".to_string()
+}
+
+/// Find the first requested scope the client is not registered for.
+///
+/// Scope-escalation guard: per RFC 6749 §3.3 a client may only ask for scopes
+/// granted to it at registration.
+fn unauthorized_scope<'a>(client: &Client, scope: &'a str) -> Option<&'a str> {
+    scope
+        .split_whitespace()
+        .find(|s| !client.scopes.iter().any(|c| c.as_str() == *s))
+}
+
+/// RFC 9728 `resource_metadata` URL advertised in a 401 `WWW-Authenticate`.
+pub(crate) fn resource_metadata_url(issuer: &str) -> String {
+    format!("{issuer}/.well-known/oauth-protected-resource")
+}
+
+/// The canonical RFC 8707 resource identifier for this server: the MCP
+/// endpoint URL. Must stay byte-identical to the `resource` field in the
+/// RFC 9728 protected-resource metadata, because clients audience-check the
+/// access token against it.
+pub(crate) fn default_resource(issuer: &str) -> String {
+    format!("{issuer}/mcp")
 }
 
 /// Parse Basic auth header → (client_id, client_secret).
@@ -251,8 +283,13 @@ pub async fn authorize(
         return error_page("only S256 code_challenge_method is supported");
     }
     let scope = params.scope.clone().unwrap_or_default();
+    // Reject a scope the client was never granted (RFC 6749 §3.3).
+    if let Some(bad) = unauthorized_scope(&client, &scope) {
+        return error_page(&format!("scope '{bad}' is not allowed for this client"));
+    }
     let state_param = params.state.clone().unwrap_or_default();
     let nonce = params.nonce.clone().unwrap_or_default();
+    let resource = params.resource.clone().unwrap_or_default();
     let html = login_page(
         &params.client_id,
         &params.redirect_uri,
@@ -261,6 +298,7 @@ pub async fn authorize(
         params.code_challenge.as_deref().unwrap_or(""),
         method,
         &nonce,
+        &resource,
     );
     Html(html).into_response()
 }
@@ -286,6 +324,26 @@ pub async fn login(
             return error_page("too many login attempts from this IP, try again in a minute");
         }
         _ => {}
+    }
+
+    // Resolve the client and validate the requested scope *before* any
+    // credential work. The POST body carries client_id/scope as hidden form
+    // fields, so validating only in the authorize GET left a trivially
+    // bypassable escalation path: POST the login form directly with a wider
+    // scope (e.g. admin) and it was written straight into the auth code.
+    let client = match state.store.get_client_by_id(&form.client_id) {
+        Some(c) => c,
+        None => return error_page("unknown client_id"),
+    };
+    // An empty scope field means "whatever this client is registered for",
+    // rather than the previous hardcoded "read write" fallback.
+    let requested_scope = if form.scope.trim().is_empty() {
+        client.scopes.join(" ")
+    } else {
+        form.scope.clone()
+    };
+    if let Some(bad) = unauthorized_scope(&client, &requested_scope) {
+        return error_page(&format!("scope '{bad}' is not allowed for this client"));
     }
 
     // Verify credentials — bcrypt is CPU-intensive (~100ms at cost 12),
@@ -317,11 +375,7 @@ pub async fn login(
             );
             // Issue authorization code.
             let code = crate::auth_store::random_token(32);
-            let scope = if form.scope.is_empty() {
-                "read write"
-            } else {
-                &form.scope
-            };
+            let scope = requested_scope.as_str();
             if let Err(e) = state.store.add_auth_code(
                 &code,
                 &form.client_id,
@@ -341,11 +395,16 @@ pub async fn login(
             } else {
                 '?'
             };
+            // RFC 9207: the authorization response MUST carry `iss` so the
+            // client can bind the code to this issuer before redeeming it.
+            // MCP clients (Claude included) validate it and abort without a
+            // token exchange when it is missing.
             let redirect = format!(
-                "{redirect_uri}{sep}code={code}&state={state}",
+                "{redirect_uri}{sep}code={code}&state={state}&iss={iss}",
                 redirect_uri = form.redirect_uri,
                 code = urlencoding::encode(&code),
                 state = urlencoding::encode(&form.state),
+                iss = urlencoding::encode(&state.config.issuer),
             );
             Redirect::to(&redirect).into_response()
         }
@@ -384,6 +443,7 @@ pub async fn login(
                 &form.code_challenge,
                 &form.code_challenge_method,
                 &form.nonce,
+                form.resource.as_deref().unwrap_or(""),
                 "invalid username or password",
             );
             (StatusCode::UNAUTHORIZED, Html(html)).into_response()
@@ -449,12 +509,22 @@ async fn handle_code_grant(state: &AppState, body: &TokenRequest, headers: &Head
     ) {
         return token_error("invalid_grant", "PKCE verification failed");
     }
+    // Audience for the access token. RFC 8707: when the client names a
+    // `resource`, the token must be audience-bound to it. Claude sends the
+    // canonical MCP URL and rejects a token whose `aud` is anything else
+    // (previously this was the client_id, which Claude refused).
+    let audience = body
+        .resource
+        .clone()
+        .filter(|r| !r.trim().is_empty())
+        .unwrap_or_else(|| default_resource(&state.config.issuer));
     // Mint access token.
     let (access_token, jti) = match jwt::mint_access_token(
         &state.config.jwt_secret,
         &state.config.issuer,
         &auth_code.username,
         &client.client_id,
+        &audience,
         &auth_code.scope,
         ACCESS_TOKEN_TTL,
     ) {
@@ -522,12 +592,42 @@ async fn handle_refresh_grant(
             "refresh token belongs to a different client",
         );
     }
-    let scope = body.scope.as_deref().unwrap_or(&old.scope).to_string();
+    // RFC 6749 §6: a refresh request may only *narrow* the granted scope.
+    // Taking the request value verbatim let a client widen its own scope on
+    // refresh (read → admin), because the token endpoint trusted `body.scope`.
+    let scope = match body.scope.as_deref() {
+        // No scope sent → keep the previously granted scope verbatim.
+        None => old.scope.clone(),
+        // Explicitly asking for nothing is a legitimate (if unusual) narrowing.
+        Some(requested) if requested.trim().is_empty() => String::new(),
+        Some(requested) => {
+            let narrowed: Vec<&str> = requested
+                .split_whitespace()
+                .filter(|s| {
+                    old.scope.split_whitespace().any(|o| o == *s)
+                        && client.scopes.iter().any(|c| c.as_str() == *s)
+                })
+                .collect();
+            if narrowed.is_empty() {
+                return token_error(
+                    "invalid_scope",
+                    "requested scope is not a subset of the previously granted scope",
+                );
+            }
+            narrowed.join(" ")
+        }
+    };
+    let audience = body
+        .resource
+        .clone()
+        .filter(|r| !r.trim().is_empty())
+        .unwrap_or_else(|| default_resource(&state.config.issuer));
     let (access_token, jti) = match jwt::mint_access_token(
         &state.config.jwt_secret,
         &state.config.issuer,
         &old.username,
         &client.client_id,
+        &audience,
         &scope,
         ACCESS_TOKEN_TTL,
     ) {
@@ -677,6 +777,57 @@ pub async fn metadata(State(state): State<AppState>) -> Json<serde_json::Value> 
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post", "none"],
         "scopes_supported": ["read", "write", "admin"],
+        // RFC 9207 / SEP-2468: we always include `iss` in authorization
+        // responses, so advertise it. Clients validate the value they get.
+        "authorization_response_iss_parameter_supported": true,
+    }))
+}
+
+/// `GET /.well-known/oauth-protected-resource` — RFC 9728 resource metadata.
+///
+/// MCP clients call this path after a 401 (optionally with the resource path
+/// appended) to discover the authorization server for this resource. It must
+/// answer *without* a Bearer token, so `app.rs` routes it ahead of the proxy
+/// catch-all; otherwise it fell through to the proxy and returned 401.
+pub async fn protected_resource_metadata(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let issuer = &state.config.issuer;
+    Json(serde_json::json!({
+        "resource": format!("{issuer}/mcp"),
+        "authorization_servers": [issuer],
+        "bearer_methods_supported": ["header"],
+        "scopes_supported": ["read", "write", "admin"],
+    }))
+}
+
+/// `GET /.well-known/openid-configuration` — OIDC-flavoured discovery alias.
+///
+/// Same endpoints as the RFC 8414 document, plus the fields an OIDC client
+/// requires. Served locally so it never reaches the proxy catch-all, which
+/// would answer 401 and abort discovery.
+pub async fn openid_configuration(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let issuer = &state.config.issuer;
+    Json(serde_json::json!({
+        "issuer": issuer,
+        "authorization_endpoint": format!("{issuer}/oauth2/auth"),
+        "token_endpoint": format!("{issuer}/oauth2/token"),
+        "registration_endpoint": format!("{issuer}/oauth2/register"),
+        "revocation_endpoint": format!("{issuer}/oauth2/revoke"),
+        "introspection_endpoint": format!("{issuer}/oauth2/introspect"),
+        "userinfo_endpoint": format!("{issuer}/profile"),
+        "jwks_uri": format!("{issuer}/.well-known/jwks-uri"),
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post", "none"],
+        "scopes_supported": ["read", "write", "admin"],
+        // OIDC-only companions. This server issues access tokens only, so
+        // these describe the HS256 migration path rather than live ID tokens.
+        "subject_types_supported": ["public"],
+        "id_token_signing_alg_values_supported": ["HS256"],
+        "claims_supported": ["iss", "sub", "aud", "exp", "iat", "scope"],
+        "authorization_response_iss_parameter_supported": true,
     }))
 }
 
@@ -692,12 +843,24 @@ pub async fn jwks() -> Json<serde_json::Value> {
 pub async fn profile(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let token = match extract_bearer(&headers) {
         Some(t) => t,
-        None => return unauthorized("missing_bearer", "Authorization: Bearer <token> required"),
+        None => {
+            return unauthorized(
+                "missing_bearer",
+                "Authorization: Bearer <token> required",
+                &resource_metadata_url(&state.config.issuer),
+            )
+        }
     };
     let claims =
         match jwt::verify_access_token(&state.config.jwt_secret, &state.config.issuer, &token) {
             Ok(c) => c,
-            Err(_) => return unauthorized("invalid_token", "token invalid or expired"),
+            Err(_) => {
+                return unauthorized(
+                    "invalid_token",
+                    "token invalid or expired",
+                    &resource_metadata_url(&state.config.issuer),
+                )
+            }
         };
     Json(serde_json::json!({
         "username": claims.sub,
@@ -879,6 +1042,7 @@ fn login_page(
     code_challenge: &str,
     code_challenge_method: &str,
     nonce: &str,
+    resource: &str,
 ) -> String {
     login_page_inner(
         client_id,
@@ -888,6 +1052,7 @@ fn login_page(
         code_challenge,
         code_challenge_method,
         nonce,
+        resource,
         "",
     )
 }
@@ -901,6 +1066,7 @@ fn login_page_with_error(
     code_challenge: &str,
     code_challenge_method: &str,
     nonce: &str,
+    resource: &str,
     error: &str,
 ) -> String {
     login_page_inner(
@@ -911,6 +1077,7 @@ fn login_page_with_error(
         code_challenge,
         code_challenge_method,
         nonce,
+        resource,
         error,
     )
 }
@@ -924,6 +1091,7 @@ fn login_page_inner(
     code_challenge: &str,
     code_challenge_method: &str,
     nonce: &str,
+    resource: &str,
     error: &str,
 ) -> String {
     let error_html = if error.is_empty() {
@@ -934,6 +1102,7 @@ fn login_page_inner(
             html_escape(error)
         )
     };
+    let resource_esc = html_escape(resource);
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -997,6 +1166,7 @@ fn login_page_inner(
     <input type="hidden" name="code_challenge" value="{code_challenge}">
     <input type="hidden" name="code_challenge_method" value="{code_challenge_method}">
     <input type="hidden" name="nonce" value="{nonce}">
+    <input type="hidden" name="resource" value="{resource_esc}">
     <div class="mb-3">
       <label for="username" class="form-label">Username</label>
       <div class="input-group">
@@ -1103,12 +1273,15 @@ fn token_error(error: &str, description: &str) -> Response {
     .into_response()
 }
 
-fn unauthorized(error: &str, description: &str) -> Response {
+fn unauthorized(error: &str, description: &str, resource_metadata: &str) -> Response {
     (
         StatusCode::UNAUTHORIZED,
         [(
             "WWW-Authenticate",
-            format!("Bearer error=\"{error}\", error_description=\"{description}\""),
+            format!(
+                "Bearer error=\"{error}\", error_description=\"{description}\", \
+                 resource_metadata=\"{resource_metadata}\""
+            ),
         )],
         Json(ErrorResponse {
             error: error.to_string(),

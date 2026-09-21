@@ -246,12 +246,39 @@ impl AuthStore {
         Ok(out)
     }
 
-    /// Delete a client by row ID (UUID) or client_id.
+    /// Delete a client by row ID (UUID) or client_id, cascading to the
+    /// tokens and codes that belong to it.
+    ///
+    /// Returns the total number of rows removed (client + refresh tokens +
+    /// auth codes), so callers treating `0` as not-found keep working: a
+    /// deleted `clients` row always contributes at least 1.
+    ///
+    /// `sessions` is deliberately *not* cascaded — that table keys on
+    /// `username`, not `client_id`, so there is no safe way to tell which
+    /// dashboard sessions belonged to this client.
     pub fn delete_client(&self, id_or_client_id: &str) -> Result<usize, AuthError> {
         let conn = self.conn.lock().expect("auth store mutex poisoned");
-        let n = conn.execute(
-            "DELETE FROM clients WHERE id = ?1 OR client_id = ?1",
-            rusqlite::params![id_or_client_id],
+        // Resolve first (row id OR public client_id) so the cascade can key
+        // on the public client_id that refresh_tokens/auth_codes store.
+        let client_id: Option<String> = conn
+            .query_row(
+                "SELECT client_id FROM clients WHERE id = ?1 OR client_id = ?1",
+                rusqlite::params![id_or_client_id],
+                |r| r.get(0),
+            )
+            .ok();
+        let Some(cid) = client_id else { return Ok(0) };
+        let mut n = conn.execute(
+            "DELETE FROM clients WHERE client_id = ?1",
+            rusqlite::params![cid],
+        )?;
+        n += conn.execute(
+            "DELETE FROM refresh_tokens WHERE client_id = ?1",
+            rusqlite::params![cid],
+        )?;
+        n += conn.execute(
+            "DELETE FROM auth_codes WHERE client_id = ?1",
+            rusqlite::params![cid],
         )?;
         Ok(n)
     }
@@ -1186,5 +1213,50 @@ mod tests {
         assert!(store.consume_auth_code("expire-code").is_err());
         // Used refresh token should be gone.
         assert!(store.consume_refresh_token("used-rt", "new").is_err());
+    }
+
+    #[test]
+    fn delete_client_cascades_refresh_tokens_and_codes() {
+        let store = tmp_store();
+        let client = store
+            .add_client(
+                "cascade-cid",
+                "secret",
+                vec!["http://localhost/cb".into()],
+                vec!["read".into()],
+                false,
+                false,
+            )
+            .expect("add client");
+        store
+            .add_refresh_token("rt-cascade", "cascade-cid", "alice", "read", 3600)
+            .expect("add refresh token");
+        store
+            .add_auth_code(
+                "code-cascade",
+                "cascade-cid",
+                "alice",
+                "http://localhost/cb",
+                "read",
+                "ch",
+                "S256",
+                60,
+            )
+            .expect("add auth code");
+
+        // Deleting by row id must resolve the public client_id and cascade.
+        let n = store.delete_client(&client.id).expect("delete client");
+        assert_eq!(n, 3, "expected client + refresh token + auth code");
+
+        assert!(store.get_client_by_id("cascade-cid").is_none());
+        assert!(store.consume_refresh_token("rt-cascade", "new").is_err());
+        assert!(store.consume_auth_code("code-cascade").is_err());
+    }
+
+    #[test]
+    fn delete_client_unknown_id_returns_zero() {
+        let store = tmp_store();
+        // Unknown identifier must report 0 so the API can map it to 404.
+        assert_eq!(store.delete_client("no-such-client").expect("delete"), 0);
     }
 }

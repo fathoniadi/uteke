@@ -106,6 +106,25 @@ fn run_serve(cli_listen: Option<String>, cli_upstream: Option<String>) -> i32 {
         tracing::warn!("expired token purge failed: {e}");
     }
 
+    // Purge at startup alone leaves used/expired auth codes and refresh
+    // tokens to accumulate in a long-running process, so run it periodically.
+    //
+    // A plain std::thread, not tokio::spawn: AuthStore is a synchronous
+    // Mutex<Connection>, which would block a runtime worker for the duration
+    // of the purge. The thread dies with the process and holds no handles
+    // that graceful shutdown needs to join.
+    const PURGE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3600);
+    let purge_state = state.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(PURGE_INTERVAL);
+        if let Err(e) = purge_state.store.purge_expired() {
+            tracing::warn!("periodic expired token purge failed: {e}");
+        }
+        if let Err(e) = purge_state.store.purge_expired_sessions() {
+            tracing::warn!("periodic session purge failed: {e}");
+        }
+    });
+
     let app = uteke_web::app::build_app(state.clone());
     let listen = config.listen.clone();
 

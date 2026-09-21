@@ -2919,7 +2919,17 @@ pub async fn handle_settings_delete_client(
         return r;
     }
     match state.store.delete_client(&id) {
-        Ok(n) if n > 0 => Json(serde_json::json!({"deleted": true, "id": id})).into_response(),
+        Ok(n) if n > 0 => {
+            let ip = crate::oauth::client_ip(&headers, &state.config.trusted_proxies);
+            state.audit.log(
+                "client_deleted",
+                Some(&sess.username),
+                Some(&id),
+                Some(&ip),
+                format!("cascade removed {n} row(s) (client + refresh_tokens + auth_codes)"),
+            );
+            Json(serde_json::json!({"deleted": true, "id": id})).into_response()
+        }
         Ok(_) => api_error(StatusCode::NOT_FOUND, "client not found"),
         Err(e) => api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -3230,7 +3240,17 @@ pub async fn handle_settings_revoke_token(
         return r;
     }
     match state.store.revoke_refresh_token_by_hash(&hash) {
-        Ok(n) if n > 0 => Json(serde_json::json!({"revoked": true, "hash": hash})).into_response(),
+        Ok(n) if n > 0 => {
+            let ip = crate::oauth::client_ip(&headers, &state.config.trusted_proxies);
+            state.audit.log(
+                "token_revoked",
+                Some(&sess.username),
+                None,
+                Some(&ip),
+                format!("refresh_token_hash={hash}"),
+            );
+            Json(serde_json::json!({"revoked": true, "hash": hash})).into_response()
+        }
         Ok(_) => api_error(StatusCode::NOT_FOUND, "token not found or already revoked"),
         Err(e) => api_error(
             StatusCode::INTERNAL_SERVER_ERROR,

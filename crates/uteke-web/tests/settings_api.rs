@@ -650,3 +650,44 @@ async fn settings_revoke_token_not_found() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+/// Deleting a client must leave a trace: before this fix no dashboard handler
+/// called `audit.log()`, so the incident was unreconstructable afterwards.
+#[tokio::test]
+async fn settings_delete_client_writes_audit_event() {
+    let app = TestApp::new().await;
+    let (cookie, csrf) = make_session(&app, "alice");
+    app.state
+        .store
+        .add_client("audit-client", "secret", vec![], vec![], false, false)
+        .unwrap();
+    let clients = app.state.store.list_clients().unwrap();
+    let id = clients
+        .iter()
+        .find(|c| c.client_id == "audit-client")
+        .map(|c| c.id.clone())
+        .unwrap();
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri(format!("/dashboard/api/settings/clients/{id}"))
+                .header("cookie", &cookie)
+                .header("x-csrf-token", &csrf)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let contents = std::fs::read_to_string(&app.audit_path).expect("audit log written");
+    assert!(
+        contents.contains("client_deleted"),
+        "audit log missing client_deleted event: {contents}"
+    );
+    // Actor attribution comes from the dashboard session.
+    assert!(contents.contains("alice"), "audit log missing actor: {contents}");
+}

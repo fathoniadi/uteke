@@ -38,17 +38,44 @@ pub async fn proxy_handler(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
+    // 0. Unknown `/.well-known/*` paths are discovery probes, not API calls.
+    // Answering 401 here told clients the document existed but needed a
+    // token, so a client probing an unrouted well-known path aborted
+    // registration instead of falling back to the advertised endpoint.
+    if uri.path().starts_with("/.well-known/") {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "not_found",
+                "error_description": "unknown .well-known path"
+            })),
+        )
+            .into_response();
+    }
+
     // 1. Validate JWT access token.
     let token = match extract_bearer(&headers) {
         Some(t) => t,
         None => {
-            return proxy_unauthorized("missing_bearer", "Authorization: Bearer <token> required");
+            // Advertise the RFC 9728 resource metadata so MCP clients can
+            // discover the authorization server after this 401.
+            return proxy_unauthorized(
+                "missing_bearer",
+                "Authorization: Bearer <token> required",
+                &crate::oauth::resource_metadata_url(&state.config.issuer),
+            );
         }
     };
     let claims =
         match jwt::verify_access_token(&state.config.jwt_secret, &state.config.issuer, &token) {
             Ok(c) => c,
-            Err(_) => return proxy_unauthorized("invalid_token", "token invalid or expired"),
+            Err(_) => {
+                return proxy_unauthorized(
+                    "invalid_token",
+                    "token invalid or expired",
+                    &crate::oauth::resource_metadata_url(&state.config.issuer),
+                )
+            }
         };
 
     // 2. Scope enforcement: read = GET, write = POST/PUT/PATCH, admin = DELETE.
@@ -155,12 +182,15 @@ fn extract_bearer(headers: &HeaderMap) -> Option<String> {
     Some(token.trim().to_string())
 }
 
-fn proxy_unauthorized(error: &str, description: &str) -> Response {
+fn proxy_unauthorized(error: &str, description: &str, resource_metadata: &str) -> Response {
     (
         StatusCode::UNAUTHORIZED,
         [(
             "WWW-Authenticate",
-            format!("Bearer error=\"{error}\", error_description=\"{description}\""),
+            format!(
+                "Bearer error=\"{error}\", error_description=\"{description}\", \
+                 resource_metadata=\"{resource_metadata}\""
+            ),
         )],
         Json(serde_json::json!({ "error": error, "error_description": description })),
     )
@@ -195,6 +225,14 @@ mod tests {
         assert!(is_hop_by_hop("Connection"));
         assert!(is_hop_by_hop("transfer-encoding"));
         assert!(!is_hop_by_hop("content-type"));
+    }
+
+    #[test]
+    fn well_known_paths_are_recognised() {
+        // The guard only fires for discovery paths; API paths still proxy.
+        assert!("/.well-known/oauth-protected-resource".starts_with("/.well-known/"));
+        assert!(!"/recall".starts_with("/.well-known/"));
+        assert!(!"/mcp".starts_with("/.well-known/"));
     }
 
     #[test]
