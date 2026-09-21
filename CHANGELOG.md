@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+<<<<<<< HEAD
 ### Added
 
 - **uteke-web dashboard: 4 new color themes + system dark mode** — the dashboard theme switcher grew from 4 to 8 themes (added rose, emerald, sky, violet — each with light and dark variants). On first visit, dark/light mode now follows the OS `prefers-color-scheme` preference; the toggle still overrides and persists in localStorage as before.
@@ -31,6 +32,27 @@
 - **uteke-web recall is now strategy-correct** — the dashboard's semantic search no longer hardcodes `strategy: "hybrid"`: the field is omitted by default so the upstream default applies (fusion since 0.16.0, or `[recall] default_strategy`), with an optional `strategy` query param passthrough and a strategy picker in the UI (Server default/Fusion/Hybrid/Vector/Fts5/Graph). The memories list now requests `include_meta: true` (#1188) for exact `has_more` (with a bare-array fallback for pre-0.17 upstreams), and `DashboardMemory` carries a `deprecated` flag surfaced as a "superseded" badge in rows and the detail view.
 
 - **uteke-web dashboard exposes the full recall surface** — `GET /dashboard/api/memories` now accepts `search_type` (`memory`/`all`/`doc`), multi-`tags` (comma-separated) plus legacy single `tag`, `entity`, `category`, `min_score`, `strict`, and time-travel/temporal filters (`at`, `after`, `before`). Semantic recall always requests `enrich: true`, so `linked_doc_slugs` are shown inline. `DashboardMemory` now normalizes and exposes `source`, `source_type`, `metadata`, `linked_doc_slugs`, `access_count`, `last_accessed`, and `result_type`; document results from `search_type=all|doc` render as document cards and link to the document detail view. The dashboard HTML gained an "Advanced" filter panel for all new options.
+=======
+## [0.18.1] - 2026-09-15
+
+Patch release. Theme: **correctness and operational hardening** - structural
+export round-trips cleanly in stores with soft-deleted memories, HTTP write
+payloads reject unknown keys, `uteke upgrade` keeps every installed artifact
+in sync with the release bundle, and `/health` no longer leaks instance
+details to unauthenticated probes.
+
+### Fixed
+
+- **Structural export drops soft-deleted memory references (#1243, #1253)** - `room_memories`, `memory_edges`, and `timeline_events` dumps are filtered by the same liveness predicate as memories; `graph_nodes.memory_id` links to soft-deleted memories are nulled; manifest section counts match the rows actually exported. FK-enforced import into a fresh store now works for real production stores with deprecated memories.
+- **HTTP write endpoints reject unknown keys (#1251, #1254)** - `POST /remember` and `POST /room/remember` return 400 naming the offending key (e.g. a v1-style `ns`) instead of silently dropping it and storing the memory in the default namespace.
+- **`uteke upgrade` updates companion binaries and ORT libs (#1245, #1255)** - `uteke-serve`, `uteke-mcp`, and the bundled `libonnxruntime*` files are replaced from the same checksum-verified archive (atomically, preserving symlinks); the version comparison normalizes the release tag's `v` prefix so an up-to-date install is no longer re-offered the same release.
+- **`GET /health` minimal payload for tokenless requests (#1252, #1257)** - without a valid token the endpoint answers `{"status":"ok"}` only (200, load-balancer friendly); version, memory counts, and update info require a valid bearer token or auth disabled. Server behavior only - CLI/MCP unchanged.
+
+### Added
+
+- **`uteke doctor` success footer (#1246, #1256)** - one quiet line after all checks pass (repo + managed cloud), human output only: skipped for `--json`, non-TTY (CI/pipes), and `doctor_footer = false` in `uteke.toml`.
+
+>>>>>>> main
 ## [0.18.0] - 2026-09-13
 
 Minor release. Theme: **agent-operable memory plumbing** - ingest with explicit timestamps, full room lifecycle management, and a recall payload contract that keeps benchmark harnesses honest. Retrieval behavior is unchanged from 0.17.0 (revalidated at the published config: recall@5 non-abs 0.9457, identical per-question rankings).
@@ -54,6 +76,11 @@ Minor release. Theme: **agent-operable memory plumbing** - ingest with explicit 
 
 - **Room rename, room update, and memory room-move (#1202)** — rooms now have sanctioned lifecycle ops matching the namespace family: `Uteke::rename_room(old, new)` rewrites the registry row and every `room_memories`/`room_documents` reference in ONE transaction (FK-safe insert→repoint→delete order; no `ON UPDATE CASCADE` needed), preserving title/description/namespace; `Uteke::update_room(id, title?, description?)` edits room metadata (schema v19 adds the additive `rooms.description` column; structural export/import carry it and stay backward-compatible with 5-column exports); `Uteke::move_memory_to_room(id, from, to)` moves a memory between rooms preserving the link's `author`/`role`/`joined_at` provenance (`Ok(0)` when not a member of `from`). Surfaces: HTTP `POST /room/rename|/room/update|/room/memory/move` (404 on missing room/link), CLI `uteke room rename|update|move-memory`, MCP `uteke_room_rename|uteke_room_update|uteke_room_memory_move`.
 - **`uteke update <id>` CLI** — in-place memory edit (content/tags/importance/pinned/type), closing the CLI surface gap: HTTP `PUT /memory` and MCP `uteke_update` already existed (#1202 item 5).
+
+### Contributors
+
+- [@KazamiHazaki](https://github.com/KazamiHazaki) — binary install ORT lib fixes (#1221)
+- [@dependabot](https://github.com/apps/dependabot) — dependency updates (dirs, tokenizers, toml, usearch)
 
 ## [0.17.0] — 2026-09-06
 
