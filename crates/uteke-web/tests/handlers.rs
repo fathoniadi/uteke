@@ -608,6 +608,41 @@ async fn register_public_client_no_secret() {
 }
 
 #[tokio::test]
+async fn register_without_scope_gets_scopes_the_proxy_enforces() {
+    // Regression: clients that omit `scope` in their DCR request (ChatGPT and
+    // similar) used to be registered with the legacy "mcp offline_access"
+    // default. The proxy enforces read/write/admin, so every POST /mcp was
+    // answered with 403 insufficient_scope — and the authorize endpoint's
+    // scope-escalation guard meant the client could never recover.
+    let app = TestApp::new().await;
+    let body = r#"{"redirect_uris":["http://localhost:54321/cb"],"token_endpoint_auth_method":"none"}"#;
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/oauth2/register")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let scope = json["scope"].as_str().unwrap();
+    let granted: Vec<&str> = scope.split_whitespace().collect();
+    for required in ["read", "write", "admin"] {
+        assert!(
+            granted.contains(&required),
+            "default DCR scope {scope:?} must include {required:?} or POST /mcp is rejected 403"
+        );
+    }
+}
+
+#[tokio::test]
 async fn bare_register_path_creates_client() {
     let app = TestApp::new().await;
     let body = r#"{"redirect_uris":["http://localhost/cb"],"scope":"read write"}"#;

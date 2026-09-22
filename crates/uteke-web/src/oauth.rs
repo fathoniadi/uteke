@@ -699,12 +699,20 @@ pub async fn register(
         crate::auth_store::random_token(48)
     };
 
-    // Default scope: "mcp offline_access" — matches what MCP clients
-    // (Claude, etc.) expect. offline_access enables refresh tokens.
+    // Default scope: "read write admin offline_access" — the scopes the proxy
+    // actually enforces (read = GET, write = POST/PUT/PATCH, admin = DELETE),
+    // plus offline_access for refresh tokens.
+    //
+    // Clients that omit `scope` in their DCR request (ChatGPT, etc.) previously
+    // got the legacy "mcp offline_access" default, which the proxy does not
+    // recognize: every POST /mcp was rejected with 403 insufficient_scope.
+    // Because the authorize endpoint refuses scope escalation (RFC 6749 §3.3),
+    // such a client was permanently stuck and could not recover by asking for
+    // more scope later. Default to the full set instead.
     let scope_str = body
         .scope
         .clone()
-        .unwrap_or_else(|| "mcp offline_access".to_string());
+        .unwrap_or_else(|| "read write admin offline_access".to_string());
     let scopes = scope_str
         .split_whitespace()
         .map(|s| s.to_string())
