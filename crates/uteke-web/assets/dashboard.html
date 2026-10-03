@@ -8,7 +8,7 @@
 <title>uteke — Dashboard</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/easymde@2.18.0/dist/easymde.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/vditor@4.0.0/dist/index.css" rel="stylesheet">
 <style>
 /* ════════════════════════════════════════════════════════════════════════
    UTEKE DASHBOARD — FLAT DESIGN THEME SYSTEM
@@ -563,52 +563,58 @@ body.sidebar-hidden .main-wrapper { margin-left: 0; }
 .doc-row-title:hover { color: var(--u-accent); }
 .doc-row-actions { white-space: nowrap; }
 
-/* ── EasyMDE (flat) ──────────────────────────────────────────────────── */
-.EasyMDEContainer .editor-toolbar { border-radius: var(--bs-border-radius) var(--bs-border-radius) 0 0; border-color: var(--u-border-strong); background: var(--u-surface); }
-.EasyMDEContainer .CodeMirror { background: var(--u-bg); color: var(--u-text); border-color: var(--u-border-strong); }
-.EasyMDEContainer .editor-preview { background: var(--u-bg); }
-
-/* EasyMDE ships a light-only palette (hardcoded #fff/#fcfcfc/#00f/near-black
-   cursor and selection). Unscoped, those leak through in dark mode as
-   invisible text, a washed-out hover state, and a black caret. Map them onto
-   the theme tokens and scope the fixes to dark so light mode is untouched. */
-[data-mode="dark"] .EasyMDEContainer .editor-toolbar button.active,
-[data-mode="dark"] .EasyMDEContainer .editor-toolbar button:hover {
-  background: var(--u-surface-hover); border-color: var(--u-border-strong);
+/* ── Vditor (flat, themed) ───────────────────────────────────────────── */
+/* Vditor ships its own two-theme palette. Rather than overriding it
+   selector by selector, remap its variables onto the dashboard tokens: the
+   tokens already flip with data-mode, so one mapping covers every
+   theme x mode variant and stays correct when a theme is added. */
+.vditor {
+  --border-color: var(--u-border);
+  --second-color: var(--u-text-muted);
+  --panel-background-color: var(--u-surface);
+  --panel-shadow: var(--u-shadow-2);
+  --toolbar-background-color: var(--u-surface);
+  --toolbar-icon-color: var(--u-text-muted);
+  --toolbar-icon-hover-color: var(--u-accent);
+  --textarea-background-color: var(--u-bg);
+  --textarea-text-color: var(--u-text);
+  --count-background-color: var(--u-surface-hover);
+  --heading-border-color: var(--u-border);
+  --blockquote-color: var(--u-text-muted);
+  /* IR-mode marker colors: the stock values are tuned for a white page and
+     several are near-invisible on a dark one. */
+  --ir-heading-color: var(--u-accent);
+  --ir-title-color: var(--u-text-muted);
+  --ir-bi-color: var(--u-info);
+  --ir-link-color: var(--u-success);
+  --ir-bracket-color: var(--u-info);
+  --ir-paren-color: var(--u-success);
+  border: none;
+  border-radius: 0;
+  font-family: inherit;
 }
-[data-mode="dark"] .EasyMDEContainer .editor-toolbar.fullscreen { background: var(--u-bg); }
-[data-mode="dark"] .EasyMDEContainer .editor-toolbar.fullscreen::before { background: linear-gradient(to right, var(--u-bg) 0, transparent 100%); }
-[data-mode="dark"] .EasyMDEContainer .editor-toolbar.fullscreen::after  { background: linear-gradient(to left, var(--u-bg) 0, transparent 100%); }
-[data-mode="dark"] .EasyMDEContainer .editor-toolbar i.separator { border-left-color: var(--u-border-strong); border-right-color: transparent; }
-[data-mode="dark"] .EasyMDEContainer .editor-statusbar,
-[data-mode="dark"] .EasyMDEContainer .editor-statusbar span { color: var(--u-text-muted); }
-[data-mode="dark"] .EasyMDEContainer .editor-preview,
-[data-mode="dark"] .EasyMDEContainer .editor-preview-side { background: var(--u-bg); color: var(--u-text); }
-[data-mode="dark"] .EasyMDEContainer .CodeMirror-cursor { border-left-color: var(--u-text); background-color: transparent; }
-[data-mode="dark"] .EasyMDEContainer .CodeMirror-selected { background: color-mix(in srgb, var(--u-accent) 32%, transparent); }
-[data-mode="dark"] .EasyMDEContainer .CodeMirror-focused .CodeMirror-selected { background: color-mix(in srgb, var(--u-accent) 45%, transparent); }
-[data-mode="dark"] .EasyMDEContainer .CodeMirror-placeholder { color: var(--u-text-muted); }
-/* Markdown syntax hues: the defaults are tuned for white paper. */
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-header,
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-def,
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-attribute,
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-link { color: var(--u-info); }
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-keyword,
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-builtin { color: var(--u-accent); }
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-string,
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-string-2 { color: var(--u-warning); }
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-comment { color: var(--u-text-muted); }
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-quote,
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-tag { color: var(--u-success); }
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-meta,
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-qualifier,
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-atom,
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-number,
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-variable-2,
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-type,
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-variable-3,
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-bracket,
-[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-hr { color: var(--u-text); }
+.vditor-toolbar { padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--u-border); }
+.vditor-toolbar__item svg { fill: currentColor; }
+.vditor-toolbar__divider { border-left: 1px solid var(--u-border); }
+.vditor-reset { color: var(--u-text); }
+.vditor-reset a { color: var(--u-accent); }
+.vditor-reset code:not(.hljs) { background: var(--u-surface-hover); color: var(--u-accent); }
+.vditor-reset blockquote { color: var(--u-text-muted); border-left-color: var(--u-accent); }
+.vditor-reset table th, .vditor-reset table td { border-color: var(--u-border); }
+.vditor-reset table th { background: var(--u-surface-hover); }
+.vditor-reset hr { border-top-color: var(--u-border); }
+.vditor-panel { border: 1px solid var(--u-border); border-radius: var(--bs-border-radius); }
+.vditor-hint { background: var(--u-surface); border: 1px solid var(--u-border); border-radius: var(--bs-border-radius); }
+.vditor-hint button { background: var(--u-surface); color: var(--u-text); }
+.vditor-hint button:hover, .vditor-hint button.vditor-hint--current { background: var(--u-accent) !important; color: var(--u-accent-text) !important; }
+.vditor-tip { background: var(--u-text); color: var(--u-bg); border-radius: var(--bs-border-radius); }
+.vditor-counter { color: var(--u-text-muted); background: var(--u-surface-hover); }
+.vditor-resize { background: var(--u-surface); }
+.vditor-resize__icon { border-color: var(--u-text-muted); }
+.vditor-outline { background: var(--u-surface); border-right: 1px solid var(--u-border); }
+.vditor-outline__title { color: var(--u-text-muted); border-bottom: 1px solid var(--u-border); }
+.vditor-outline__item { color: var(--u-text); }
+.vditor-outline__item--current, .vditor-outline__item:hover { color: var(--u-accent); }
 
 /* ── Document editor page (word-processor feel) ──────────────────────── */
 /* The editor is a full page, not a dialog: the document IS the page and the
@@ -638,15 +644,12 @@ body.sidebar-hidden .main-wrapper { margin-left: 0; }
 
 /* The paper: one writing surface with a generous measure, no nested frames. */
 .doc-paper { background: var(--u-surface); border: 1px solid var(--u-border); border-radius: var(--bs-border-radius); overflow: hidden; }
-.doc-paper .EasyMDEContainer .editor-toolbar { border: none; border-bottom: 1px solid var(--u-border); background: var(--u-surface); padding: 0.35rem 0.5rem; }
-.doc-paper .EasyMDEContainer .CodeMirror {
-  border: none; background: var(--u-bg); color: var(--u-text);
-  padding: 1.75rem 2.25rem; min-height: 62vh; font-size: 1rem; line-height: 1.75;
-}
-.doc-paper .EasyMDEContainer .CodeMirror-scroll { min-height: 62vh; }
-.doc-paper .EasyMDEContainer .editor-preview,
-.doc-paper .EasyMDEContainer .editor-preview-side { padding: 1.75rem 2.25rem; font-size: 1rem; line-height: 1.75; }
-.doc-paper .EasyMDEContainer .editor-statusbar { border-top: 1px solid var(--u-border); padding: 0.25rem 0.6rem; }
+/* The writing measure. IR/WYSIWYG render into .vditor-reset; split view uses
+   the .vditor-sv textarea. Both get the same generous page-like padding. */
+.doc-paper .vditor-content { min-height: 62vh; }
+.doc-paper .vditor-ir .vditor-reset,
+.doc-paper .vditor-wysiwyg .vditor-reset,
+.doc-paper .vditor-sv { padding: 1.75rem 2.25rem; font-size: 1rem; line-height: 1.75; }
 .editor-foot { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.6rem; font-size: 0.75rem; color: var(--u-text-muted); }
 
 /* Focus mode: the sidebar is the only chrome that competes with the page. */
@@ -656,9 +659,9 @@ body.doc-zen .editor-bar-actions .btn-ghost,
 body.doc-zen .editor-foot { opacity: 0; pointer-events: none; }
 
 @media (max-width: 768px) {
-  .doc-paper .EasyMDEContainer .CodeMirror,
-  .doc-paper .EasyMDEContainer .editor-preview,
-  .doc-paper .EasyMDEContainer .editor-preview-side { padding: 1rem; }
+  .doc-paper .vditor-ir .vditor-reset,
+  .doc-paper .vditor-wysiwyg .vditor-reset,
+  .doc-paper .vditor-sv { padding: 1rem; }
   .editor-title-input { font-size: 1rem; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1202,7 +1205,7 @@ try { if(localStorage.getItem("uteke_sidebar_hidden") === "1") document.body.cla
       </div>
       <datalist id="doc-parent-list"></datalist>
       <div class="doc-paper">
-        <textarea id="doc-edit-content"></textarea>
+        <div id="doc-editor"></div>
       </div>
       <div class="editor-foot">
         <span id="doc-edit-words">0 words</span>
@@ -1704,7 +1707,7 @@ try { if(localStorage.getItem("uteke_sidebar_hidden") === "1") document.body.cla
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/easymde@2.18.0/dist/easymde.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/vditor@4.0.0/dist/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
 <script>
@@ -1735,6 +1738,7 @@ function applyMode(mode){
   document.documentElement.setAttribute("data-bs-theme", mode);
   try { localStorage.setItem("uteke_mode", mode); } catch(_){}
   if(window.__utekeSyncChrome) window.__utekeSyncChrome();
+  if(window.__utekeSyncEditorTheme) window.__utekeSyncEditorTheme(mode);
   const icon = document.getElementById("mode-icon");
   const label = document.getElementById("mode-label");
   if(icon) icon.className = mode === "dark" ? "bi bi-moon-stars" : "bi bi-sun";
@@ -2312,8 +2316,9 @@ function init(){
 init();
 
 // ── Documents (PLAN-docs.md D3–D5) ───────────────────────────────────────
-let D = { q:"", mode:"hybrid", filter:"all", rows:[], currentSlug:null, editSlug:null, easyMDE:null,
-          createParent:null, dirty:false, saving:false, editorOpen:false };
+let D = { q:"", mode:"hybrid", filter:"all", rows:[], currentSlug:null, editSlug:null, editor:null,
+          createParent:null, dirty:false, saving:false, editorOpen:false,
+          editorReady:false, pendingFocus:false };
 let docModals = {};
 
 function initDocModals(){
@@ -2764,13 +2769,15 @@ function docSetSaveState(text, cls){
 function docUpdateWordCount(){
   const el = document.getElementById("doc-edit-words");
   if(!el) return;
-  const text = D.easyMDE ? D.easyMDE.value() : (document.getElementById("doc-edit-content") || {value:""}).value || "";
+  const text = D.editor ? D.editor.getValue() : "";
   const trimmed = text.trim();
   const words = trimmed ? trimmed.split(/\s+/).length : 0;
   el.textContent = words.toLocaleString() + " word" + (words === 1 ? "" : "s") + " · " + text.length.toLocaleString() + " chars";
 }
 function docMarkDirty(){
-  if(!D.editorOpen) return;
+  // Vditor fires `input` while it inserts the initial value, which would mark
+  // a freshly opened document dirty and schedule a pointless autosave.
+  if(!D.editorOpen || !D.editorReady) return;
   D.dirty = true;
   docSetSaveState("Unsaved changes", "is-dirty");
   clearTimeout(docAutosaveT);
@@ -2780,7 +2787,7 @@ function docMarkDirty(){
   if(D.editSlug) docAutosaveT = setTimeout(docAutosave, DOC_AUTOSAVE_MS);
 }
 async function docAutosave(){
-  if(!D.editorOpen || !D.editSlug || !D.dirty || D.saving) return;
+  if(!D.editorOpen || !D.editorReady || !D.editSlug || !D.dirty || D.saving) return;
   await docSubmitEdit({ silent: true });
 }
 function docEditorShow(){
@@ -2807,13 +2814,13 @@ function docToggleZen(){
   try { localStorage.setItem("uteke_sidebar_hidden", zen ? "1" : "0"); } catch(_){}
   const btn = document.getElementById("doc-edit-zen");
   if(btn) btn.title = zen ? "Exit focus mode" : "Focus mode";
-  if(!zen && window.innerWidth > 768 && D.easyMDE) setTimeout(() => D.easyMDE.codemirror.focus(), 260);
+  if(!zen && window.innerWidth > 768 && D.editor) setTimeout(() => { try { D.editor.focus(); } catch(_){} }, 260);
 }
 // Returns true when it is safe to leave the editor. On cancel the caller must
 // restore the editor route, because the hash has already moved by then.
 function docConfirmLeaveEditor(force){
   if(!D.editorOpen) return true;
-  if(!force && D.dirty && D.easyMDE){
+  if(!force && D.dirty && D.editor){
     if(!confirm("This document has unsaved changes. Leave the editor?")) return false;
   }
   D.dirty = false;
@@ -2847,10 +2854,10 @@ function docOpenCreate(parentSlug){
   } else {
     lockedGroup.style.display = "none";
   }
-  docInitMDE("");
+  D.pendingFocus = window.innerWidth > 768;
+  docInitEditor("");
   docSetSaveState(parentSlug ? "New child · not saved yet" : "New document · not saved yet", "");
   docEditorSyncRoute();
-  if(window.innerWidth > 768 && D.easyMDE) setTimeout(() => D.easyMDE.codemirror.focus(), 50);
 }
 async function docOpenEdit(slug){
   slug = slug || D.currentSlug;
@@ -2870,37 +2877,88 @@ async function docOpenEdit(slug){
     document.getElementById("doc-edit-title-input").value = d.title || "";
     document.getElementById("doc-edit-parent-locked").style.display = "none";
     makeChips(document.getElementById("doc-edit-tags"), d.tags || []);
-    docInitMDE(d.content || "");
+    D.pendingFocus = window.innerWidth > 768;
+    docInitEditor(d.content || "");
     docSetSaveState("Saved", "is-saved");
     docEditorSyncRoute();
-    if(window.innerWidth > 768 && D.easyMDE) setTimeout(() => D.easyMDE.codemirror.focus(), 50);
   } catch(e){ toast("Failed: " + e.message); }
 }
-function docInitMDE(initialContent){
-  // toTextArea() syncs the OLD editor's live content back into the textarea
-  // before tearing it down — so the value must be (re)set AFTER this call,
-  // not before, or the previous document's content leaks into the next
-  // create/edit session (#bug found 2026-08-14).
-  if(D.easyMDE){ D.easyMDE.toTextArea(); D.easyMDE = null; }
-  const el = document.getElementById("doc-edit-content");
-  el.value = initialContent ?? "";
-  D.easyMDE = new EasyMDE({
-    element: el,
-    spellChecker: false,
-    autofocus: false,
-    status: false,            // the editor's own footer reports counts
+function docInitEditor(initialContent){
+  // Vditor renders asynchronously into a container. Destroying the previous
+  // instance first stops the old document's content and undo stack from
+  // leaking into the next session (#bug found 2026-08-14 with the previous
+  // editor, same failure mode).
+  if(D.editor){ try { D.editor.destroy(); } catch(_){} D.editor = null; }
+  D.editorReady = false;
+  const el = document.getElementById("doc-editor");
+  if(!el) return;
+  el.innerHTML = "";
+  const dark = document.documentElement.getAttribute("data-mode") === "dark";
+  D.editor = new Vditor("doc-editor", {
+    cdn: "https://cdn.jsdelivr.net/npm/vditor@4.0.0",
+    // localStorage caching defaults to ON. On an editor that swaps documents
+    // that would resurrect the previously opened document's content.
+    cache: { enable: false },
+    // IR (instant rendering): markdown stays the storage format while the page
+    // looks rendered as you type — the closest thing here to Word/Docs.
+    mode: "ir",
+    height: "auto",
+    lang: "en_US",
+    theme: dark ? "dark" : "classic",
+    value: initialContent || "",
     placeholder: "Start writing… Markdown works here: # for headings, - for lists, **bold**.",
-    // No "fullscreen": the editor already owns the page, and its Esc handler
-    // would fight the editor's own Esc-to-exit.
-    toolbar: ["bold","italic","heading","|","quote","code","unordered-list","ordered-list","|","link","table","|","preview","side-by-side","|","guide"],
+    counter: { enable: false },          // the editor footer reports counts
+    outline: { enable: false, position: "left" },
+    // No pin: the sticky .editor-bar already keeps Save/status reachable.
+    toolbarConfig: { hide: false, pin: false },
+    preview: {
+      // Pin the content-theme path too: its default is an unpkg URL derived
+      // from Vditor's own version, not from `cdn`, and we load from jsDelivr.
+      theme: {
+        current: dark ? "dark" : "light",
+        path: "https://cdn.jsdelivr.net/npm/vditor@4.0.0/dist/css/content-theme",
+      },
+      hljs: { style: dark ? "atom-one-dark" : "github", lineNumber: false },
+      math: { engine: "KaTeX" },
+    },
+    // "upload" is deliberately absent: dashboard_api.rs has no upload endpoint
+    // yet, so a button for it would be a dead end.
+    toolbar: [
+      "emoji","headings","bold","italic","strike","|","line","quote",
+      "list","ordered-list","check","outdent","indent","|",
+      "code","inline-code","|","undo","redo","|",
+      "link","table","|","edit-mode","both","preview","outline","|","help",
+    ],
+    input: () => { docUpdateWordCount(); docMarkDirty(); },
+    after: () => {
+      D.editorReady = true;
+      D.dirty = false;
+      docUpdateWordCount();
+      if(D.pendingFocus){ D.pendingFocus = false; try { D.editor.focus(); } catch(_){} }
+    },
   });
-  D.easyMDE.codemirror.on("change", () => { docUpdateWordCount(); docMarkDirty(); });
-  D.dirty = false;
-  docUpdateWordCount();
 }
+// Vditor keeps its own palette (plus separate content and code themes) rather
+// than reading our CSS variables, so a mode flip has to be pushed into it.
+// Assigned on window so the early applyMode() call cannot hit a TDZ error on
+// the `let D` declared further down the script.
+window.__utekeSyncEditorTheme = function(mode){
+  if(!D.editor || !D.editorReady) return;
+  const dark = mode === "dark";
+  try {
+    D.editor.setTheme(dark ? "dark" : "classic", dark ? "dark" : "light", dark ? "atom-one-dark" : "github");
+  } catch(_){}
+};
 async function docSubmitEdit(opts){
   opts = opts || {};
-  const content = D.easyMDE ? D.easyMDE.value() : document.getElementById("doc-edit-content").value;
+  // Never write before the editor has rendered. Vditor builds its instance
+  // asynchronously, and a value read from a half-built editor comes back
+  // empty — saving then would blank a real document on disk.
+  if(!D.editor || !D.editorReady){
+    if(!opts.silent) toast("Editor is still loading…");
+    return;
+  }
+  const content = D.editor.getValue();
   const tagsEl = document.getElementById("doc-edit-tags");
   const tags = tagsEl && tagsEl._get ? tagsEl._get() : [];
   const title = document.getElementById("doc-edit-title-input").value.trim();
@@ -2961,7 +3019,13 @@ async function docSubmitEdit(opts){
 document.addEventListener("keydown", (e) => {
   if(!D.editorOpen) return;
   if((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "S")){ e.preventDefault(); docSubmitEdit(); }
-  else if(e.key === "Escape" && !document.querySelector(".modal.show")){ docEditorExit(); }
+  // Vditor uses Esc to dismiss its own popups (headings, emoji, hints).
+  // Exiting the editor too would close the document underneath them.
+  else if(e.key === "Escape"
+          && !document.querySelector(".modal.show")
+          && !document.querySelector(".vditor-panel:not(.vditor-panel--none)")){
+    docEditorExit();
+  }
 });
 window.addEventListener("beforeunload", (e) => {
   if(D.editorOpen && D.dirty){ e.preventDefault(); e.returnValue = ""; }
