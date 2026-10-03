@@ -610,6 +610,64 @@ body.sidebar-hidden .main-wrapper { margin-left: 0; }
 [data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-bracket,
 [data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-hr { color: var(--u-text); }
 
+/* ── Document editor page (word-processor feel) ──────────────────────── */
+/* The editor is a full page, not a dialog: the document IS the page and the
+   chrome steps back. The bar stays reachable while content scrolls, so save
+   state is always visible without stealing height from the page. */
+.editor-bar {
+  position: sticky; top: 48px; z-index: 800;
+  background: color-mix(in srgb, var(--u-bg) 88%, transparent);
+  -webkit-backdrop-filter: blur(var(--u-blur)) saturate(var(--u-saturate));
+  backdrop-filter: blur(var(--u-blur)) saturate(var(--u-saturate));
+  border-bottom: 1px solid var(--u-border);
+}
+.editor-bar-inner { display: flex; align-items: center; gap: 0.75rem; padding: 0.55rem 1rem; }
+.editor-bar-meta { flex: 1; min-width: 0; }
+.editor-title-input {
+  width: 100%; border: none; background: transparent; color: var(--u-text);
+  font-size: 1.15rem; font-weight: 650; letter-spacing: -0.015em;
+  padding: 0.1rem 0; outline: none;
+}
+.editor-title-input::placeholder { color: var(--u-text-muted); font-weight: 500; }
+.editor-title-input:focus { border-bottom: 1px solid var(--u-accent); }
+.editor-bar-sub { display: flex; align-items: center; gap: 0.4rem; margin-top: 0.05rem; }
+.editor-save-state { font-size: 0.72rem; color: var(--u-text-muted); }
+.editor-save-state.is-dirty { color: var(--u-warning); }
+.editor-save-state.is-saved { color: var(--u-success); }
+.editor-bar-actions { display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0; }
+
+/* The paper: one writing surface with a generous measure, no nested frames. */
+.doc-paper { background: var(--u-surface); border: 1px solid var(--u-border); border-radius: var(--bs-border-radius); overflow: hidden; }
+.doc-paper .EasyMDEContainer .editor-toolbar { border: none; border-bottom: 1px solid var(--u-border); background: var(--u-surface); padding: 0.35rem 0.5rem; }
+.doc-paper .EasyMDEContainer .CodeMirror {
+  border: none; background: var(--u-bg); color: var(--u-text);
+  padding: 1.75rem 2.25rem; min-height: 62vh; font-size: 1rem; line-height: 1.75;
+}
+.doc-paper .EasyMDEContainer .CodeMirror-scroll { min-height: 62vh; }
+.doc-paper .EasyMDEContainer .editor-preview,
+.doc-paper .EasyMDEContainer .editor-preview-side { padding: 1.75rem 2.25rem; font-size: 1rem; line-height: 1.75; }
+.doc-paper .EasyMDEContainer .editor-statusbar { border-top: 1px solid var(--u-border); padding: 0.25rem 0.6rem; }
+.editor-foot { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.6rem; font-size: 0.75rem; color: var(--u-text-muted); }
+
+/* Focus mode: the sidebar is the only chrome that competes with the page. */
+.editor-bar, .editor-bar-sub, .editor-bar-actions .btn-ghost, .editor-foot { transition: opacity var(--u-base) var(--u-ease); }
+body.doc-zen .editor-bar-sub,
+body.doc-zen .editor-bar-actions .btn-ghost,
+body.doc-zen .editor-foot { opacity: 0; pointer-events: none; }
+
+@media (max-width: 768px) {
+  .doc-paper .EasyMDEContainer .CodeMirror,
+  .doc-paper .EasyMDEContainer .editor-preview,
+  .doc-paper .EasyMDEContainer .editor-preview-side { padding: 1rem; }
+  .editor-title-input { font-size: 1rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .editor-bar, .editor-bar-sub, .editor-bar-actions .btn-ghost, .editor-foot { transition: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .editor-bar { background: var(--u-bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+
 /* ── Flat alert/link ─────────────────────────────────────────────────── */
 a { color: var(--u-accent); }
 a:hover { color: var(--u-accent-hover); }
@@ -1113,6 +1171,47 @@ try { if(localStorage.getItem("uteke_sidebar_hidden") === "1") document.body.cla
       <div class="list-group list-group-flush" id="doc-children-body"></div>
     </div>
   </div>
+  <!-- Docs editor — a full page, not a modal. The document is the page. -->
+  <div id="docs-editor-view" style="display:none;">
+    <div class="editor-bar">
+      <div class="editor-bar-inner container-fluid" style="max-width:1100px;">
+        <button class="btn btn-sm btn-outline-secondary" onclick="docEditorExit()" title="Back to documents (Esc)"><i class="bi bi-arrow-left"></i></button>
+        <div class="editor-bar-meta">
+          <input id="doc-edit-title-input" class="editor-title-input" placeholder="Untitled document" aria-label="Document title" autocomplete="off">
+          <div class="editor-bar-sub">
+            <span class="badge bg-secondary" id="doc-edit-slug-badge" style="display:none;"></span>
+            <span class="editor-save-state" id="doc-edit-save-state">Draft</span>
+          </div>
+        </div>
+        <div class="editor-bar-actions">
+          <button class="btn btn-sm btn-outline-secondary btn-ghost" id="doc-edit-zen" onclick="docToggleZen()" title="Focus mode"><i class="bi bi-arrows-angle-expand"></i></button>
+          <button class="btn btn-sm btn-outline-secondary btn-ghost" id="doc-edit-move" onclick="docOpenMove()" title="Move"><i class="bi bi-diagram-3"></i></button>
+          <button class="btn btn-sm btn-primary" id="doc-edit-save" onclick="docSubmitEdit()"><i class="bi bi-save"></i> Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="container-fluid py-3" style="max-width:1100px;">
+      <div class="d-flex align-items-center flex-wrap gap-2 mb-2">
+        <span class="text-muted small">Tags</span>
+        <div class="chips flex-grow-1" id="doc-edit-tags"></div>
+      </div>
+      <div class="mb-2" id="doc-edit-parent-locked" style="display:none;">
+        <span class="text-muted small">New child of</span>
+        <span class="badge bg-secondary" id="doc-edit-parent-locked-label"></span>
+      </div>
+      <datalist id="doc-parent-list"></datalist>
+      <div class="doc-paper">
+        <textarea id="doc-edit-content"></textarea>
+      </div>
+      <div class="editor-foot">
+        <span id="doc-edit-words">0 words</span>
+        <span>·</span>
+        <span>Markdown · <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>S</kbd> to save · <kbd>Esc</kbd> to exit</span>
+      </div>
+    </div>
+  </div>
+
 </div><!-- /page-docs -->
 
 <!-- ── Rooms page ──────────────────────────────────────────────────────── -->
@@ -1455,30 +1554,8 @@ try { if(localStorage.getItem("uteke_sidebar_hidden") === "1") document.body.cla
   </div>
 </div>
 
-<!-- Document create/edit modal -->
-<div class="modal fade" id="m-doc-edit" tabindex="-1">
-  <div class="modal-dialog modal-xl">
-    <div class="modal-content">
-      <div class="modal-header"><h5 class="modal-title" id="doc-edit-title">New document</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-      <div class="modal-body">
-        <div class="mb-3" id="doc-edit-slug-group" style="display:none;"><label class="form-label">Slug (immutable)</label><input id="doc-edit-slug" class="form-control" disabled></div>
-        <div class="mb-3"><label class="form-label">Title</label><input id="doc-edit-title-input" class="form-control" placeholder="Document title (slug auto-generated from this on create)"></div>
-        <div class="mb-3"><label class="form-label">Tags</label><div class="chips" id="doc-edit-tags"></div></div>
-        <div class="mb-3" id="doc-edit-parent-locked" style="display:none;">
-          <label class="form-label">Parent</label>
-          <div><span class="badge bg-secondary" id="doc-edit-parent-locked-label"></span></div>
-        </div>
-        <datalist id="doc-parent-list"></datalist>
-        <div class="mb-3"><label class="form-label">Content (Markdown)</label><textarea id="doc-edit-content" class="form-control" rows="12"></textarea></div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-        <button class="btn btn-primary" onclick="docSubmitEdit()"><i class="bi bi-save"></i> Save</button>
-      </div>
-    </div>
-  </div>
-</div>
-
+<!-- Document create/edit is now a full page (see #docs-editor-view inside
+     #page-docs) rather than a modal. -->
 <!-- Document move modal -->
 <div class="modal fade" id="m-doc-move" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered">
@@ -2235,11 +2312,13 @@ function init(){
 init();
 
 // ── Documents (PLAN-docs.md D3–D5) ───────────────────────────────────────
-let D = { q:"", mode:"hybrid", filter:"all", rows:[], currentSlug:null, editSlug:null, easyMDE:null, createParent:null };
+let D = { q:"", mode:"hybrid", filter:"all", rows:[], currentSlug:null, editSlug:null, easyMDE:null,
+          createParent:null, dirty:false, saving:false, editorOpen:false };
 let docModals = {};
 
 function initDocModals(){
-  ["m-doc-edit","m-doc-move","m-doc-delete"].forEach(id => { docModals[id] = new bootstrap.Modal(document.getElementById(id)); });
+  // The editor is a page now, not a modal — only move/delete still need one.
+  ["m-doc-move","m-doc-delete"].forEach(id => { docModals[id] = new bootstrap.Modal(document.getElementById(id)); });
 }
 
 // ── Hash routing ──────────────────────────────────────────────────────────
@@ -2411,7 +2490,25 @@ function autoHideSidebarMobile(){
 }
 function routeHash(){
   const h = window.location.hash.slice(1); // remove #
-  if(h.startsWith("/documents/")){
+  // The editor owns its own routes ("/editor/..."). Leaving it for anywhere
+  // else — a sidebar link, another document — must be deliberate when there
+  // is unsaved work, so the guard runs before any route is honoured.
+  if(!h.startsWith("/editor") && D.editorOpen){
+    if(!docConfirmLeaveEditor()){ history.replaceState(null, "", docEditorRoute()); return; }
+  }
+  if(h === "/editor/new" || h.startsWith("/editor/new?")){
+    const qi = h.indexOf("?");
+    const q = qi > -1 ? new URLSearchParams(h.slice(qi + 1)) : null;
+    showPage("documents");
+    docOpenCreate(q ? q.get("parent") : null);
+  } else if(h.startsWith("/editor/")){
+    const slug = decodeURIComponent(h.slice("/editor/".length));
+    showPage("documents");
+    if(slug) docOpenEdit(slug); else docShowList();
+  } else if(h === "/editor"){
+    showPage("documents");
+    docShowList();
+  } else if(h.startsWith("/documents/")){
     const slug = decodeURIComponent(h.slice("/documents/".length));
     showPage("documents");
     docShowDetail(slug);
@@ -2524,8 +2621,13 @@ function docRenderTree(){
 
 // ── Docs: detail ──────────────────────────────────────────────────────────
 async function docShowDetail(slug){
+  if(!docConfirmLeaveEditor()){ history.replaceState(null, "", docEditorRoute()); return; }
   D.currentSlug = slug;
+  // Read context now owns the document; a leftover editSlug from a previous
+  // editing session would otherwise leak into Move/Delete on this page.
+  D.editSlug = null;
   document.getElementById("docs-list-view").style.display = "none";
+  document.getElementById("docs-editor-view").style.display = "none";
   document.getElementById("docs-detail-view").style.display = "";
   try {
     const d = await apiGet("/dashboard/api/documents/"+encodeURIComponent(slug));
@@ -2646,12 +2748,97 @@ function docValidParent(inputId){
   }
   return { ok:true, value:v };
 }
+// ── Docs: editor (full page) ──────────────────────────────────────────────
+// One page, one paper, nothing modal. Autosave keeps the document durable
+// without a "Save" ritual, and the guard below makes leaving deliberate.
+let docAutosaveT = null;
+const DOC_AUTOSAVE_MS = 2500;
+
+function docSetSaveState(text, cls){
+  const el = document.getElementById("doc-edit-save-state");
+  if(!el) return;
+  el.textContent = text;
+  el.classList.remove("is-dirty","is-saved");
+  if(cls) el.classList.add(cls);
+}
+function docUpdateWordCount(){
+  const el = document.getElementById("doc-edit-words");
+  if(!el) return;
+  const text = D.easyMDE ? D.easyMDE.value() : (document.getElementById("doc-edit-content") || {value:""}).value || "";
+  const trimmed = text.trim();
+  const words = trimmed ? trimmed.split(/\s+/).length : 0;
+  el.textContent = words.toLocaleString() + " word" + (words === 1 ? "" : "s") + " · " + text.length.toLocaleString() + " chars";
+}
+function docMarkDirty(){
+  if(!D.editorOpen) return;
+  D.dirty = true;
+  docSetSaveState("Unsaved changes", "is-dirty");
+  clearTimeout(docAutosaveT);
+  // Autosave only edits an existing slug. A brand-new document has no slug
+  // until the first explicit Save, and silently creating documents from
+  // stray keystrokes would be worse than asking once.
+  if(D.editSlug) docAutosaveT = setTimeout(docAutosave, DOC_AUTOSAVE_MS);
+}
+async function docAutosave(){
+  if(!D.editorOpen || !D.editSlug || !D.dirty || D.saving) return;
+  await docSubmitEdit({ silent: true });
+}
+function docEditorShow(){
+  document.getElementById("docs-list-view").style.display = "none";
+  document.getElementById("docs-detail-view").style.display = "none";
+  document.getElementById("docs-editor-view").style.display = "";
+  D.editorOpen = true;
+}
+function docEditorRoute(){
+  // A dedicated /editor/ prefix, not /documents/<slug>/edit: slugs are
+  // [A-Za-z0-9_-]+ (see is_valid_slug), so a document could legitimately be
+  // named "new" or "edit" and steal the route.
+  if(D.editSlug) return "#/editor/" + encodeURIComponent(D.editSlug);
+  return "#/editor/new" + (D.createParent ? "?parent=" + encodeURIComponent(D.createParent) : "");
+}
+function docEditorSyncRoute(){
+  const target = docEditorRoute();
+  if(window.location.hash !== target) history.replaceState(null, "", target);
+}
+function docToggleZen(){
+  const zen = document.body.classList.toggle("doc-zen");
+  if(window.utekeSidebar) window.utekeSidebar.animateTo(!zen);
+  else document.body.classList.toggle("sidebar-hidden", zen);
+  try { localStorage.setItem("uteke_sidebar_hidden", zen ? "1" : "0"); } catch(_){}
+  const btn = document.getElementById("doc-edit-zen");
+  if(btn) btn.title = zen ? "Exit focus mode" : "Focus mode";
+  if(!zen && window.innerWidth > 768 && D.easyMDE) setTimeout(() => D.easyMDE.codemirror.focus(), 260);
+}
+// Returns true when it is safe to leave the editor. On cancel the caller must
+// restore the editor route, because the hash has already moved by then.
+function docConfirmLeaveEditor(force){
+  if(!D.editorOpen) return true;
+  if(!force && D.dirty && D.easyMDE){
+    if(!confirm("This document has unsaved changes. Leave the editor?")) return false;
+  }
+  D.dirty = false;
+  D.editorOpen = false;
+  clearTimeout(docAutosaveT);
+  document.body.classList.remove("doc-zen");
+  const view = document.getElementById("docs-editor-view");
+  if(view) view.style.display = "none";
+  return true;
+}
+function docEditorExit(){
+  const slug = D.editSlug;
+  if(!docConfirmLeaveEditor()) return;
+  // Land on the saved document, which is where reading normally resumes.
+  if(slug) window.location.hash = "#/documents/" + encodeURIComponent(slug);
+  else window.location.hash = "#/documents";
+}
 function docOpenCreate(parentSlug){
   D.editSlug = null;
   D.createParent = parentSlug || null;
-  document.getElementById("doc-edit-title").textContent = parentSlug ? `New child of ${parentSlug}` : "New document";
-  document.getElementById("doc-edit-slug-group").style.display = "none"; // slug auto-generated on create
+  D.dirty = false;
+  docEditorShow();
   document.getElementById("doc-edit-title-input").value = "";
+  document.getElementById("doc-edit-slug-badge").style.display = "none";
+  document.getElementById("doc-edit-move").style.display = "none"; // move needs a saved slug
   makeChips(document.getElementById("doc-edit-tags"), []);
   const lockedGroup = document.getElementById("doc-edit-parent-locked");
   if(parentSlug){
@@ -2660,31 +2847,40 @@ function docOpenCreate(parentSlug){
   } else {
     lockedGroup.style.display = "none";
   }
-  docModals["m-doc-edit"].show();
-  // Init EasyMDE after modal is visible
-  setTimeout(() => docInitMDE(""), 200);
+  docInitMDE("");
+  docSetSaveState(parentSlug ? "New child · not saved yet" : "New document · not saved yet", "");
+  docEditorSyncRoute();
+  if(window.innerWidth > 768 && D.easyMDE) setTimeout(() => D.easyMDE.codemirror.focus(), 50);
 }
-async function docOpenEdit(){
-  if(!D.currentSlug) return;
+async function docOpenEdit(slug){
+  slug = slug || D.currentSlug;
+  if(!slug) return;
+  // Re-routing to the document already open must not clobber live edits.
+  if(D.editorOpen && D.editSlug === slug){ docEditorShow(); return; }
   try {
-    const d = await apiGet("/dashboard/api/documents/"+encodeURIComponent(D.currentSlug));
-    D.editSlug = D.currentSlug;
+    const d = await apiGet("/dashboard/api/documents/" + encodeURIComponent(slug));
+    D.editSlug = slug;
     D.createParent = null;
-    document.getElementById("doc-edit-title").textContent = "Edit document";
-    document.getElementById("doc-edit-slug-group").style.display = ""; // show slug (immutable)
-    document.getElementById("doc-edit-slug").value = d.slug;
+    D.dirty = false;
+    docEditorShow();
+    const badge = document.getElementById("doc-edit-slug-badge");
+    badge.textContent = d.slug;
+    badge.style.display = "";
+    document.getElementById("doc-edit-move").style.display = "";
     document.getElementById("doc-edit-title-input").value = d.title || "";
-    document.getElementById("doc-edit-parent-locked").style.display = "none"; // parent changed via Move
+    document.getElementById("doc-edit-parent-locked").style.display = "none";
     makeChips(document.getElementById("doc-edit-tags"), d.tags || []);
-    docModals["m-doc-edit"].show();
-    setTimeout(() => docInitMDE(d.content || ""), 200);
-  } catch(e){ toast("Failed: "+e.message); }
+    docInitMDE(d.content || "");
+    docSetSaveState("Saved", "is-saved");
+    docEditorSyncRoute();
+    if(window.innerWidth > 768 && D.easyMDE) setTimeout(() => D.easyMDE.codemirror.focus(), 50);
+  } catch(e){ toast("Failed: " + e.message); }
 }
 function docInitMDE(initialContent){
-  // toTextArea() syncs the OLD editor's live content back into the
-  // textarea before tearing it down — so the value must be (re)set AFTER
-  // this call, not before, or the previous document's content leaks into
-  // the next create/edit session (#bug found 2026-08-14).
+  // toTextArea() syncs the OLD editor's live content back into the textarea
+  // before tearing it down — so the value must be (re)set AFTER this call,
+  // not before, or the previous document's content leaks into the next
+  // create/edit session (#bug found 2026-08-14).
   if(D.easyMDE){ D.easyMDE.toTextArea(); D.easyMDE = null; }
   const el = document.getElementById("doc-edit-content");
   el.value = initialContent ?? "";
@@ -2692,79 +2888,143 @@ function docInitMDE(initialContent){
     element: el,
     spellChecker: false,
     autofocus: false,
-    status: ["lines","words"],
-    toolbar: ["bold","italic","heading","|","quote","code","unordered-list","ordered-list","|","link","table","|","preview","side-by-side","fullscreen","|","guide"],
+    status: false,            // the editor's own footer reports counts
+    placeholder: "Start writing… Markdown works here: # for headings, - for lists, **bold**.",
+    // No "fullscreen": the editor already owns the page, and its Esc handler
+    // would fight the editor's own Esc-to-exit.
+    toolbar: ["bold","italic","heading","|","quote","code","unordered-list","ordered-list","|","link","table","|","preview","side-by-side","|","guide"],
   });
+  D.easyMDE.codemirror.on("change", () => { docUpdateWordCount(); docMarkDirty(); });
+  D.dirty = false;
+  docUpdateWordCount();
 }
-async function docSubmitEdit(){
+async function docSubmitEdit(opts){
+  opts = opts || {};
   const content = D.easyMDE ? D.easyMDE.value() : document.getElementById("doc-edit-content").value;
-  const tags = document.getElementById("doc-edit-tags")._get();
-  if(D.editSlug){
-    // Update
-    const body = { content, tags };
-    const title = document.getElementById("doc-edit-title-input").value.trim();
-    if(title) body.title = title;
-    try {
-      await apiMutate("/dashboard/api/documents/"+encodeURIComponent(D.editSlug),"PUT",body);
-      docModals["m-doc-edit"].hide();
-      toast("Document updated");
-      docShowDetail(D.editSlug);
-    } catch(e){ toast("Update failed: "+e.message); }
-  } else {
-    // Create — slug is auto-generated by the server from title (or first
-    // heading in content). The response is the full document; use its slug
-    // to navigate to the new detail view.
-    if(!content.trim()){ toast("Content required"); return; }
-    const body = { content, tags };
-    const title = document.getElementById("doc-edit-title-input").value.trim();
-    if(title) body.title = title;
-    if(D.createParent) body.parent = D.createParent;
-    try {
-      const d = await apiMutate("/dashboard/api/documents","POST",body);
-      docModals["m-doc-edit"].hide();
-      toast("Document created");
-      const newSlug = d.slug || "";
-      if(newSlug) window.location.hash = "#/documents/"+encodeURIComponent(newSlug);
-    } catch(e){ toast("Create failed: "+e.message); }
+  const tagsEl = document.getElementById("doc-edit-tags");
+  const tags = tagsEl && tagsEl._get ? tagsEl._get() : [];
+  const title = document.getElementById("doc-edit-title-input").value.trim();
+  if(D.saving) return;
+  D.saving = true;
+  const btn = document.getElementById("doc-edit-save");
+  if(btn && !opts.silent) btn.disabled = true;
+  if(!opts.silent) docSetSaveState("Saving…", "");
+  try {
+    if(D.editSlug){
+      const body = { content, tags };
+      if(title) body.title = title;
+      await apiMutate("/dashboard/api/documents/" + encodeURIComponent(D.editSlug), "PUT", body);
+      D.dirty = false;
+      const t = new Date();
+      docSetSaveState("Saved " + t.toLocaleTimeString(undefined, {hour:"2-digit", minute:"2-digit"}), "is-saved");
+      if(!opts.silent) toast("Document updated");
+    } else {
+      if(!content.trim()){ docSetSaveState("Add some content first", "is-dirty"); if(!opts.silent) toast("Content required"); return; }
+      const body = { content, tags };
+      if(title) body.title = title;
+      if(D.createParent) body.parent = D.createParent;
+      const d = await apiMutate("/dashboard/api/documents", "POST", body);
+      D.editSlug = d.slug || null;
+      D.dirty = false;
+      docSetSaveState("Created", "is-saved");
+      if(D.editSlug){
+        // Adopt create mode as edit mode in place, so autosave can take over
+        // without a reload or a round-trip through the detail page.
+        const badge = document.getElementById("doc-edit-slug-badge");
+        badge.textContent = D.editSlug;
+        badge.style.display = "";
+        document.getElementById("doc-edit-move").style.display = "";
+        docEditorSyncRoute();
+      }
+      if(!opts.silent) toast("Document created");
+    }
+  } catch(e){
+    docSetSaveState("Not saved — retry", "is-dirty");
+    if(!opts.silent) toast((D.editSlug ? "Update" : "Create") + " failed: " + e.message);
+  } finally {
+    D.saving = false;
+    if(btn) btn.disabled = false;
   }
 }
 
+// Title and tags are part of the document too — their edits are dirty state.
+(function wireEditorInputs(){
+  const title = document.getElementById("doc-edit-title-input");
+  if(title) title.addEventListener("input", docMarkDirty);
+  const tagsEl = document.getElementById("doc-edit-tags");
+  if(tagsEl){
+    tagsEl.addEventListener("click", docMarkDirty);
+    // The chip input commits on keydown; defer so the tag lands first.
+    tagsEl.addEventListener("keydown", (e) => { if(e.key === "Enter" || e.key === ",") setTimeout(docMarkDirty, 0); });
+  }
+})();
+document.addEventListener("keydown", (e) => {
+  if(!D.editorOpen) return;
+  if((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "S")){ e.preventDefault(); docSubmitEdit(); }
+  else if(e.key === "Escape" && !document.querySelector(".modal.show")){ docEditorExit(); }
+});
+window.addEventListener("beforeunload", (e) => {
+  if(D.editorOpen && D.dirty){ e.preventDefault(); e.returnValue = ""; }
+});
+
 // ── Docs: move ────────────────────────────────────────────────────────────
 function docOpenMove(){
-  if(!D.currentSlug) return;
-  document.getElementById("doc-move-label").textContent = D.currentSlug;
+  // Reachable from the detail page (D.currentSlug) and from the editor
+  // (D.editSlug, where currentSlug points at whatever was read last). Pick by
+  // context: a stale editSlug must never make this move the wrong document.
+  const slug = D.editorOpen ? (D.editSlug || D.currentSlug) : (D.currentSlug || D.editSlug);
+  if(!slug) return;
+  D.moveSlug = slug;
+  document.getElementById("doc-move-label").textContent = slug;
   document.getElementById("doc-move-parent").value = "";
-  docLoadParentOptions(D.currentSlug);
+  docLoadParentOptions(slug);
   docModals["m-doc-move"].show();
 }
 async function docConfirmMove(){
-  if(!D.currentSlug) return;
+  const slug = D.moveSlug || (D.editorOpen ? D.editSlug : D.currentSlug);
+  if(!slug) return;
   const parentCheck = docValidParent("doc-move-parent");
   if(!parentCheck.ok) return;
   const body = {};
   if(parentCheck.value) body.new_parent = parentCheck.value;
+  const fromEditor = D.editorOpen;
   try {
-    await apiMutate("/dashboard/api/documents/"+encodeURIComponent(D.currentSlug)+"/move","POST",body);
+    await apiMutate("/dashboard/api/documents/"+encodeURIComponent(slug)+"/move","POST",body);
     docModals["m-doc-move"].hide();
     toast("Document moved");
-    docLoad();
-    docShowDetail(D.currentSlug);
+    if(fromEditor){
+      // Moving does not invalidate the open document, so stay in the editor
+      // rather than dropping the writer back into a read view mid-thought.
+      if(D.editSlug === slug) D.dirty = false;
+    } else {
+      docLoad();
+      docShowDetail(slug);
+    }
   } catch(e){ toast("Move failed: "+e.message); }
 }
 
 // ── Docs: delete ───────────────────────────────────────────────────────────
 function docOpenDelete(){
-  if(!D.currentSlug) return;
-  document.getElementById("doc-del-msg").textContent = `Delete "${D.currentSlug}"? This will cascade to all children and chunks.`;
+  const slug = D.editorOpen ? (D.editSlug || D.currentSlug) : (D.currentSlug || D.editSlug);
+  if(!slug) return;
+  D.moveSlug = slug;
+  document.getElementById("doc-del-msg").textContent = `Delete "${slug}"? This will cascade to all children and chunks.`;
   docModals["m-doc-delete"].show();
 }
 async function docConfirmDelete(){
-  if(!D.currentSlug) return;
+  const slug = D.moveSlug || D.editSlug || D.currentSlug;
+  if(!slug) return;
   try {
-    const r = await apiMutate("/dashboard/api/documents/"+encodeURIComponent(D.currentSlug),"DELETE");
+    const r = await apiMutate("/dashboard/api/documents/"+encodeURIComponent(slug),"DELETE");
     docModals["m-doc-delete"].hide();
     const sub = r.subtree_size != null ? ` (${r.subtree_size} children cascaded)` : "";
     toast("Deleted"+sub);
+    // Deleting is explicit, so there is nothing to guard — drop the editor
+    // state outright or the stale editor would keep pointing at a dead slug.
+    if(D.editorOpen) docConfirmLeaveEditor(true);
+    D.currentSlug = null;
+    D.editSlug = null;
+    D.dirty = false;
     // Always show + reload the list explicitly — setting the hash alone is
     // a no-op when already on "#/documents" (deleting from the list's own
     // dropdown), so the deleted row would otherwise stay stuck on screen.
@@ -2785,16 +3045,21 @@ function onDocSearchInput(){
 function onDocModeChange(){ D.mode = document.getElementById("doc-mode").value; if(D.q) docLoad(); }
 function onDocFilterChange(){ D.filter = document.getElementById("doc-filter").value; if(!D.q) docLoad(); }
 function docResetFilters(){
-  D = { q:"", mode:"hybrid", filter:"all", rows:D.rows, currentSlug:D.currentSlug, editSlug:D.editSlug, easyMDE:D.easyMDE, createParent:D.createParent };
+  D.q = ""; D.mode = "hybrid"; D.filter = "all";
   document.getElementById("doc-q").value = "";
   document.getElementById("doc-mode").value = "hybrid";
   document.getElementById("doc-filter").value = "all";
   docLoad();
 }
 function docShowList(){
+  if(!docConfirmLeaveEditor()){ history.replaceState(null, "", docEditorRoute()); return; }
   document.getElementById("docs-detail-view").style.display = "none";
+  document.getElementById("docs-editor-view").style.display = "none";
   document.getElementById("docs-list-view").style.display = "";
   D.currentSlug = null;
+  // No document is open, so nothing should remember one — a stale editSlug
+  // would let Move/Delete target the last-edited doc from the list.
+  D.editSlug = null;
   docLoad();
 }
 
