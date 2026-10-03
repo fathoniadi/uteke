@@ -1113,10 +1113,12 @@ fn login_page_inner(
     let resource_esc = html_escape(resource);
     format!(
         r#"<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="indigo" data-mode="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content='#ffffff' id="u-theme-color">
 <title>uteke — Login</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
@@ -1130,8 +1132,13 @@ fn login_page_inner(
   [data-theme="warm"][data-mode="dark"] {{ --u-accent:#fbbf24; --u-accent-text:#1c1917; --u-accent-subtle:#422006; --u-bg:#1c1917; --u-surface:#292524; --u-surface-hover:#44403c; --u-border:#44403c; --u-border-strong:#57534e; --u-text:#e7e5e4; --u-text-muted:#a8a29e; --u-sidebar-bg:#0c0a09; --u-success:#4ade80; --u-warning:#fbbf24; --u-danger:#f87171; --u-info:#38bdf8; }}
   [data-theme="mono"] {{ --u-accent:#171717; --u-accent-text:#fff; --u-accent-subtle:#e5e5e5; --u-bg:#fff; --u-surface:#f5f5f5; --u-surface-hover:#e5e5e5; --u-border:#e5e5e5; --u-border-strong:#d4d4d4; --u-text:#171717; --u-text-muted:#737373; --u-sidebar-bg:#171717; --u-success:#16a34a; --u-warning:#d97706; --u-danger:#dc2626; --u-info:#0ea5e9; }}
   [data-theme="mono"][data-mode="dark"] {{ --u-accent:#fafafa; --u-accent-text:#0a0a0a; --u-accent-subtle:#262626; --u-bg:#0a0a0a; --u-surface:#171717; --u-surface-hover:#262626; --u-border:#262626; --u-border-strong:#404040; --u-text:#fafafa; --u-text-muted:#a3a3a3; --u-sidebar-bg:#000; --u-success:#4ade80; --u-warning:#fbbf24; --u-danger:#f87171; --u-info:#38bdf8; }}
-  :root {{ --bs-primary: var(--u-accent); --bs-body-bg: var(--u-bg); --bs-body-color: var(--u-text); --bs-border-color: var(--u-border); --bs-border-radius: 4px; --bs-link-color: var(--u-accent); }}
+  :root {{ --bs-primary: var(--u-accent); --bs-body-bg: var(--u-bg); --bs-body-color: var(--u-text); --bs-border-color: var(--u-border); --bs-border-radius: 12px; --bs-link-color: var(--u-accent); --bs-secondary-color: var(--u-text-muted); --bs-tertiary-color: var(--u-text-muted); --bs-emphasis-color: var(--u-text); }}
   * {{ box-shadow: none !important; }}
+  /* Paint the root canvas explicitly: it is what the browser shows for the
+     first frame, and what fills the overscroll area on pull-to-refresh. */
+  html {{ background: var(--u-bg); }}
+  html[data-mode="dark"] {{ color-scheme: dark; }}
+  html[data-mode="light"] {{ color-scheme: light; }}
   body {{ background: var(--u-bg); color: var(--u-text); }}
   .login-card {{ max-width: 380px; }}
   .card {{ background: var(--u-surface); border: 1px solid var(--u-border); border-radius: 4px; }}
@@ -1140,21 +1147,111 @@ fn login_page_inner(
   .form-control {{ background: var(--u-bg); border: 1px solid var(--u-border-strong); border-radius: 4px; color: var(--u-text); }}
   .form-control:focus {{ border-color: var(--u-accent); box-shadow: 0 0 0 1px var(--u-accent) !important; }}
   .form-label {{ color: var(--u-text-muted); font-weight: 500; font-size: 0.8rem; }}
+  /* Bootstrap reads --bs-secondary-color for .text-muted/.form-text, and that
+     token keeps its light-mode default (near-black) unless data-bs-theme is
+     set. Pin every secondary-text surface to the themed token so nothing can
+     render black on a dark card. */
+  .text-muted, .text-body-secondary, .form-text, .form-text *,
+  .text-body-tertiary, .blockquote-footer {{ color: var(--u-text-muted) !important; }}
   .input-group-text {{ background: var(--u-surface); border-color: var(--u-border-strong); color: var(--u-text-muted); }}
   .btn-primary {{ --bs-btn-bg: var(--u-accent); --bs-btn-border-color: var(--u-accent); --bs-btn-hover-bg: var(--u-accent); --bs-btn-hover-border-color: var(--u-accent); --bs-btn-color: var(--u-accent-text); --bs-btn-hover-color: var(--u-accent-text); border-radius: 4px; }}
   .alert-danger {{ background: var(--u-danger); border: none; border-radius: 4px; color: #fff; }}
+
+  /* ── Apple-style layer: response, material, depth, type ─────────────── */
+  :root {{
+    --u-accent-hover: var(--u-accent);
+    --u-shadow-1: 0 1px 2px rgba(0,0,0,.06), 0 1px 1px rgba(0,0,0,.04);
+    --u-shadow-3: 0 24px 60px rgba(0,0,0,.22), 0 6px 18px rgba(0,0,0,.10);
+    --u-ease: cubic-bezier(.32,.72,0,1);
+  }}
+  body {{
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-optical-sizing: auto;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Static wash only — never a full-viewport moving background. */
+    background:
+      radial-gradient(120% 100% at 50% -20%, color-mix(in srgb, var(--u-accent) 16%, transparent), transparent 60%),
+      var(--u-bg);
+  }}
+  .login-card {{ width: 100%; max-width: 380px; padding: 0 1rem; }}
+  /* One material, clearly separating the task from the desktop behind it. */
+  .card {{
+    background: color-mix(in srgb, var(--u-bg) 86%, transparent);
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
+    backdrop-filter: blur(28px) saturate(180%);
+    border: 1px solid color-mix(in srgb, var(--u-border-strong) 70%, transparent);
+    border-radius: 20px;
+    box-shadow: var(--u-shadow-3) !important;
+  }}
+  .card-body {{ background: transparent; }}
+  h1.h4 {{ font-size: 1.25rem; letter-spacing: -.015em; }}
+  .form-label {{ letter-spacing: .006em; }}
+  .form-control {{
+    border-radius: 10px;
+    transition: border-color 120ms linear, box-shadow 120ms linear;
+  }}
+  .form-control:focus {{
+    box-shadow: 0 0 0 1px var(--u-accent), 0 0 0 4px color-mix(in srgb, var(--u-accent) 22%, transparent) !important;
+  }}
+  .input-group-text {{ border-radius: 10px 0 0 10px; }}
+  .input-group > .form-control {{ border-radius: 0 10px 10px 0; }}
+  /* Feedback lands on pointer-down (:active), never only on release. */
+  .btn-primary {{
+    border-radius: 12px; padding: .6rem 1rem; font-weight: 600; letter-spacing: -.005em;
+    box-shadow: var(--u-shadow-1) !important;
+    touch-action: manipulation;
+    transition: transform 120ms var(--u-ease), background-color 120ms linear, box-shadow 120ms linear;
+  }}
+  .btn-primary:active {{ transform: scale(.975); background: var(--u-accent-hover); }}
+  .alert-danger {{ border-radius: 12px; }}
+  /* --u-danger is a bright red in dark mode, where white text only reaches
+     2.8:1. Dark ink is the readable choice there, and still 4.8:1 in light. */
+  [data-mode="dark"] .alert-danger {{ color: #0f172a; }}
+  :where(a, button, input, select, textarea):focus-visible {{ outline: 2px solid var(--u-accent); outline-offset: 2px; }}
+
+  /* ── Accessibility: gentler equivalent, feedback kept ──────────────── */
+  @media (prefers-reduced-motion: reduce) {{
+    *, *::before, *::after {{ animation-duration: .01ms !important; transition-duration: .01ms !important; }}
+    .btn-primary:active {{ transform: none !important; background: var(--u-accent-hover) !important; }}
+  }}
+  @media (prefers-reduced-transparency: reduce) {{
+    .card {{ background: var(--u-bg) !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }}
+  }}
+  @media (prefers-contrast: more) {{
+    .card, .form-control {{ border: 1px solid var(--u-text) !important; }}
+    .form-label, .text-muted {{ color: var(--u-text) !important; }}
+  }}
 </style>
 <script>
   (function() {{
+    var THEMES = ["indigo","slate","warm","mono","rose","emerald","sky","violet"];
+    var t = "indigo", m = "light";
     try {{
-      var t = localStorage.getItem("uteke_theme") || "indigo";
-      var m = localStorage.getItem("uteke_mode") || "light";
-      document.documentElement.setAttribute("data-theme", t);
-      document.documentElement.setAttribute("data-mode", m);
-    }} catch(e) {{
-      document.documentElement.setAttribute("data-theme", "indigo");
-      document.documentElement.setAttribute("data-mode", "light");
-    }}
+      var st = localStorage.getItem("uteke_theme");
+      if (THEMES.indexOf(st) > -1) t = st;
+      var sm = localStorage.getItem("uteke_mode");
+      if (sm === "dark" || sm === "light") m = sm;
+      else if (window.matchMedia("(prefers-color-scheme: dark)").matches) m = "dark";
+    }} catch(e) {{}}
+    var d = document.documentElement;
+    d.setAttribute("data-theme", t);
+    d.setAttribute("data-mode", m);
+    // Bootstrap components (.btn-close, form internals, --bs-secondary-color)
+    // only switch to their dark palette via this attribute; data-mode alone
+    // leaves Bootstrap in light mode and .text-muted renders near-black.
+    d.setAttribute("data-bs-theme", m);
+    // The area pull-to-refresh reveals is painted from the root background and
+    // theme-color, so mirror the resolved canvas color into both. Otherwise a
+    // dark-mode reload flashes a light band while the page is being pulled.
+    try {{
+      d.style.colorScheme = m === "dark" ? "dark" : "light";
+      var meta = document.getElementById("u-theme-color");
+      if (meta) {{
+        var bg = getComputedStyle(d).getPropertyValue("--u-bg").trim();
+        if (bg) meta.setAttribute("content", bg);
+      }}
+    }} catch(e) {{}}
   }})();
 </script>
 </head>
@@ -1164,9 +1261,10 @@ fn login_page_inner(
     <div class="text-center mb-3">
       <i class="bi bi-shield-lock fs-1 text-primary"></i>
       <h1 class="h4 mb-0 mt-2">Sign in to uteke</h1>
+      <p class="small text-muted mb-0 mt-1">Authorize access to your memory store</p>
     </div>
     {error_html}
-    <form method="POST" action="/oauth2/login">
+    <form method="POST" action="/oauth2/login" class="mt-3">
     <input type="hidden" name="client_id" value="{client_id}">
     <input type="hidden" name="redirect_uri" value="{redirect_uri}">
     <input type="hidden" name="scope" value="{scope}">
@@ -1179,14 +1277,14 @@ fn login_page_inner(
       <label for="username" class="form-label">Username</label>
       <div class="input-group">
         <span class="input-group-text"><i class="bi bi-person"></i></span>
-        <input id="username" name="username" type="text" class="form-control" required autofocus>
+        <input id="username" name="username" type="text" class="form-control" required autofocus autocomplete="username">
       </div>
     </div>
     <div class="mb-3">
       <label for="password" class="form-label">Password</label>
       <div class="input-group">
         <span class="input-group-text"><i class="bi bi-key"></i></span>
-        <input id="password" name="password" type="password" class="form-control" required>
+        <input id="password" name="password" type="password" class="form-control" required autocomplete="current-password">
       </div>
     </div>
     <button type="submit" class="btn btn-primary w-100"><i class="bi bi-box-arrow-in-right"></i> Sign in</button>
@@ -1209,10 +1307,12 @@ fn login_page_inner(
 fn error_page(msg: &str) -> Response {
     let body = format!(
         r#"<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="indigo" data-mode="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content='#ffffff' id="u-theme-color">
 <title>uteke — Error</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
@@ -1226,33 +1326,89 @@ fn error_page(msg: &str) -> Response {
   [data-theme="mono"] {{ --u-accent:#171717; --u-bg:#fff; --u-surface:#f5f5f5; --u-border:#e5e5e5; --u-text:#171717; --u-text-muted:#737373; --u-danger:#dc2626; }}
   [data-theme="mono"][data-mode="dark"] {{ --u-accent:#fafafa; --u-bg:#0a0a0a; --u-surface:#171717; --u-border:#262626; --u-text:#fafafa; --u-text-muted:#a3a3a3; --u-danger:#f87171; }}
   * {{ box-shadow: none !important; }}
+  /* Paint the root canvas explicitly: it is what the browser shows for the
+     first frame, and what fills the overscroll area on pull-to-refresh. */
+  html {{ background: var(--u-bg); }}
+  html[data-mode="dark"] {{ color-scheme: dark; }}
+  html[data-mode="light"] {{ color-scheme: light; }}
   body {{ background: var(--u-bg); color: var(--u-text); }}
   .card {{ background: var(--u-surface); border: 1px solid var(--u-border); border-radius: 4px; }}
   .card-body {{ background: var(--u-bg); }}
   .text-danger {{ color: var(--u-danger) !important; }}
   .text-muted {{ color: var(--u-text-muted) !important; }}
   .bg-light {{ background: var(--u-bg) !important; }}
+
+  /* ── Apple-style layer: material, depth, type ──────────────────────── */
+  :root {{
+    --u-shadow-3: 0 24px 60px rgba(0,0,0,.22), 0 6px 18px rgba(0,0,0,.10);
+    --u-ease: cubic-bezier(.32,.72,0,1);
+  }}
+  body {{
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-optical-sizing: auto;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background:
+      radial-gradient(120% 100% at 50% -20%, color-mix(in srgb, var(--u-danger) 14%, transparent), transparent 60%),
+      var(--u-bg);
+  }}
+  .card {{
+    background: color-mix(in srgb, var(--u-bg) 88%, transparent);
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
+    backdrop-filter: blur(28px) saturate(180%);
+    border: 1px solid color-mix(in srgb, var(--u-border-strong) 70%, transparent);
+    border-radius: 20px;
+    box-shadow: var(--u-shadow-3) !important;
+  }}
+  .card-body {{ background: transparent; }}
+  h1.h4 {{ font-size: 1.25rem; letter-spacing: -.015em; }}
+  p.text-muted {{ line-height: 1.5; }}
+  @media (prefers-reduced-transparency: reduce) {{
+    .card {{ background: var(--u-bg) !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }}
+  }}
+  @media (prefers-contrast: more) {{
+    .card {{ border: 1px solid var(--u-text) !important; }}
+    .text-muted {{ color: var(--u-text) !important; }}
+  }}
 </style>
 <script>
   (function() {{
+    var THEMES = ["indigo","slate","warm","mono","rose","emerald","sky","violet"];
+    var t = "indigo", m = "light";
     try {{
-      var t = localStorage.getItem("uteke_theme") || "indigo";
-      var m = localStorage.getItem("uteke_mode") || "light";
-      document.documentElement.setAttribute("data-theme", t);
-      document.documentElement.setAttribute("data-mode", m);
-    }} catch(e) {{
-      document.documentElement.setAttribute("data-theme", "indigo");
-      document.documentElement.setAttribute("data-mode", "light");
-    }}
+      var st = localStorage.getItem("uteke_theme");
+      if (THEMES.indexOf(st) > -1) t = st;
+      var sm = localStorage.getItem("uteke_mode");
+      if (sm === "dark" || sm === "light") m = sm;
+      else if (window.matchMedia("(prefers-color-scheme: dark)").matches) m = "dark";
+    }} catch(e) {{}}
+    var d = document.documentElement;
+    d.setAttribute("data-theme", t);
+    d.setAttribute("data-mode", m);
+    // Bootstrap components (.btn-close, form internals, --bs-secondary-color)
+    // only switch to their dark palette via this attribute; data-mode alone
+    // leaves Bootstrap in light mode and .text-muted renders near-black.
+    d.setAttribute("data-bs-theme", m);
+    // The area pull-to-refresh reveals is painted from the root background and
+    // theme-color, so mirror the resolved canvas color into both. Otherwise a
+    // dark-mode reload flashes a light band while the page is being pulled.
+    try {{
+      d.style.colorScheme = m === "dark" ? "dark" : "light";
+      var meta = document.getElementById("u-theme-color");
+      if (meta) {{
+        var bg = getComputedStyle(d).getPropertyValue("--u-bg").trim();
+        if (bg) meta.setAttribute("content", bg);
+      }}
+    }} catch(e) {{}}
   }})();
 </script>
 </head>
 <body class="d-flex align-items-center justify-content-center min-vh-100">
-<div class="card" style="max-width:420px;">
+<div class="card" style="max-width:420px; width:100%;">
   <div class="card-body p-4 text-center">
     <i class="bi bi-exclamation-octagon fs-1 text-danger"></i>
     <h1 class="h4 mt-2">Authentication Error</h1>
-    <p class="text-muted">{}</p>
+    <p class="text-muted mb-0">{}</p>
   </div>
 </div>
 </body>

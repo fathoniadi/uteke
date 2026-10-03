@@ -1,8 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="indigo" data-mode="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff" id="u-theme-color">
 <title>uteke — Dashboard</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
@@ -211,9 +213,9 @@
   --bs-body-bg: var(--u-bg);
   --bs-body-color: var(--u-text);
   --bs-border-color: var(--u-border);
-  --bs-border-radius: 4px;
-  --bs-border-radius-sm: 3px;
-  --bs-border-radius-lg: 6px;
+  --bs-border-radius: 12px;
+  --bs-border-radius-sm: 8px;
+  --bs-border-radius-lg: 18px;
   --bs-link-color: var(--u-accent);
   --bs-link-hover-color: var(--u-accent-hover);
   --bs-primary: var(--u-accent);
@@ -236,6 +238,12 @@
 
 /* ── Base flat design overrides ──────────────────────────────────────── */
 * { box-shadow: none !important; }
+/* Paint the canvas explicitly. Without a background on <html> the browser shows
+   its own white canvas for the first frame, and that same color is what fills
+   the overscroll region revealed by pull-to-refresh. */
+html { background: var(--u-bg); }
+html[data-mode="dark"] { color-scheme: dark; }
+html[data-mode="light"] { color-scheme: light; }
 body { background: var(--u-bg); color: var(--u-text); font-feature-settings: "cv02","cv03","cv04","cv11"; }
 
 /* ── Flat card ───────────────────────────────────────────────────────── */
@@ -287,21 +295,30 @@ body { background: var(--u-bg); color: var(--u-text); font-feature-settings: "cv
   --bs-btn-hover-color: var(--u-text);
   --bs-btn-active-bg: var(--u-surface-hover);
 }
-.btn-outline-danger { --bs-btn-color: var(--u-danger); --bs-btn-border-color: var(--u-danger); --bs-btn-hover-bg: var(--u-danger); --bs-btn-hover-color: #fff; }
-.btn-outline-success { --bs-btn-color: var(--u-success); --bs-btn-border-color: var(--u-success); --bs-btn-hover-bg: var(--u-success); --bs-btn-hover-color: #fff; }
-.btn-outline-warning { --bs-btn-color: var(--u-warning); --bs-btn-border-color: var(--u-warning); --bs-btn-hover-bg: var(--u-warning); --bs-btn-hover-color: #fff; }
-.btn-danger { --bs-btn-bg: var(--u-danger); --bs-btn-border-color: var(--u-danger); --bs-btn-hover-bg: var(--u-danger); --bs-btn-hover-border-color: var(--u-danger); }
-.btn-warning { --bs-btn-bg: var(--u-warning); --bs-btn-border-color: var(--u-warning); --bs-btn-hover-bg: var(--u-warning); --bs-btn-hover-border-color: var(--u-warning); --bs-btn-color: #fff; --bs-btn-hover-color: #fff; }
+.btn-outline-danger { --bs-btn-color: var(--u-danger); --bs-btn-border-color: var(--u-danger); --bs-btn-hover-bg: var(--u-danger); --bs-btn-hover-color: var(--u-on-danger); }
+.btn-outline-success { --bs-btn-color: var(--u-success); --bs-btn-border-color: var(--u-success); --bs-btn-hover-bg: var(--u-success); --bs-btn-hover-color: var(--u-on-tint); }
+.btn-outline-warning { --bs-btn-color: var(--u-warning); --bs-btn-border-color: var(--u-warning); --bs-btn-hover-bg: var(--u-warning); --bs-btn-hover-color: var(--u-on-tint); }
+.btn-danger { --bs-btn-bg: var(--u-danger); --bs-btn-border-color: var(--u-danger); --bs-btn-hover-bg: var(--u-danger); --bs-btn-hover-border-color: var(--u-danger); --bs-btn-color: var(--u-on-danger); --bs-btn-hover-color: var(--u-on-danger); }
+.btn-warning { --bs-btn-bg: var(--u-warning); --bs-btn-border-color: var(--u-warning); --bs-btn-hover-bg: var(--u-warning); --bs-btn-hover-border-color: var(--u-warning); --bs-btn-color: var(--u-on-tint); --bs-btn-hover-color: var(--u-on-tint); }
+.btn-success { --bs-btn-bg: var(--u-success); --bs-btn-border-color: var(--u-success); --bs-btn-hover-bg: var(--u-success); --bs-btn-hover-border-color: var(--u-success); --bs-btn-color: var(--u-on-tint); --bs-btn-hover-color: var(--u-on-tint); }
+/* Sits on the always-dark sidebar, so it must follow --u-sidebar-text.
+   Bootstrap's default reads --bs-light (--u-surface), which in dark mode is
+   a dark slate on a darker sidebar — effectively invisible. */
+.btn-outline-light {
+  --bs-btn-color: var(--u-sidebar-text); --bs-btn-border-color: var(--u-sidebar-border);
+  --bs-btn-hover-bg: var(--u-sidebar-hover); --bs-btn-hover-border-color: var(--u-sidebar-border);
+  --bs-btn-hover-color: #fff; --bs-btn-active-bg: var(--u-sidebar-hover); --bs-btn-active-color: #fff;
+}
 .btn-light { --bs-btn-bg: var(--u-surface); --bs-btn-border-color: var(--u-border); --bs-btn-color: var(--u-text); --bs-btn-hover-bg: var(--u-surface-hover); --bs-btn-hover-color: var(--u-text); }
 
 /* ── Flat badges ─────────────────────────────────────────────────────── */
 .badge { border-radius: var(--bs-border-radius-sm); font-weight: 600; }
 .badge.bg-primary { background: var(--u-accent) !important; color: var(--u-accent-text) !important; }
-.badge.bg-info { background: var(--u-info) !important; color: #fff !important; }
-.badge.bg-success { background: var(--u-success) !important; }
-.badge.bg-warning { background: var(--u-warning) !important; color: #fff !important; }
-.badge.bg-danger { background: var(--u-danger) !important; }
-.badge.bg-secondary { background: var(--u-text-muted) !important; }
+.badge.bg-info { background: var(--u-info) !important; color: var(--u-on-tint) !important; }
+.badge.bg-success { background: var(--u-success) !important; color: var(--u-on-tint) !important; }
+.badge.bg-warning { background: var(--u-warning) !important; color: var(--u-on-tint) !important; }
+.badge.bg-danger { background: var(--u-danger) !important; color: var(--u-on-danger) !important; }
+.badge.bg-secondary { background: var(--u-text-muted) !important; color: var(--u-on-secondary) !important; }
 .badge.bg-light { background: var(--u-surface) !important; color: var(--u-text) !important; border: 1px solid var(--u-border) !important; }
 .badge.bg-dark { background: var(--u-sidebar-bg) !important; }
 .badge.bg-success.bg-opacity-25 { background: rgba(var(--u-accent-rgb),0.15) !important; color: var(--u-success) !important; }
@@ -314,16 +331,16 @@ body { background: var(--u-bg); color: var(--u-text); font-feature-settings: "cv
 .text-danger { color: var(--u-danger) !important; }
 .text-secondary { color: var(--u-text-muted) !important; }
 .text-muted { color: var(--u-text-muted) !important; }
-.text-light { color: var(--u-text-inverse) !important; }
+.text-light { color: var(--u-sidebar-text) !important; }
 .text-dark { color: var(--u-text) !important; }
 
 /* ── Flat bg colors ──────────────────────────────────────────────────── */
 .bg-primary { background: var(--u-accent) !important; color: var(--u-accent-text) !important; }
-.bg-info { background: var(--u-info) !important; color: #fff !important; }
-.bg-success { background: var(--u-success) !important; }
-.bg-warning { background: var(--u-warning) !important; color: #fff !important; }
-.bg-danger { background: var(--u-danger) !important; }
-.bg-secondary { background: var(--u-text-muted) !important; }
+.bg-info { background: var(--u-info) !important; color: var(--u-on-tint) !important; }
+.bg-success { background: var(--u-success) !important; color: var(--u-on-tint) !important; }
+.bg-warning { background: var(--u-warning) !important; color: var(--u-on-tint) !important; }
+.bg-danger { background: var(--u-danger) !important; color: var(--u-on-danger) !important; }
+.bg-secondary { background: var(--u-text-muted) !important; color: var(--u-on-secondary) !important; }
 .bg-light { background: var(--u-surface) !important; color: var(--u-text) !important; }
 .bg-dark { background: var(--u-sidebar-bg) !important; }
 
@@ -373,7 +390,7 @@ body { background: var(--u-bg); color: var(--u-text); font-feature-settings: "cv
 .dropdown-item { color: var(--u-text); }
 .dropdown-item:hover, .dropdown-item:focus { background: var(--u-surface-hover); color: var(--u-text); }
 .dropdown-item.text-danger { color: var(--u-danger) !important; }
-.dropdown-item.text-danger:hover { background: var(--u-danger); color: #fff !important; }
+.dropdown-item.text-danger:hover { background: var(--u-danger); color: var(--u-on-danger) !important; }
 .dropdown-divider { border-color: var(--u-border); }
 
 /* ── Flat modal ──────────────────────────────────────────────────────── */
@@ -415,8 +432,8 @@ body { background: var(--u-bg); color: var(--u-text); font-feature-settings: "cv
 .pagination .page-link:focus { box-shadow: none !important; }
 
 /* ── Flat toast ──────────────────────────────────────────────────────── */
-.toast { --bs-toast-bg: var(--u-sidebar-bg); --bs-toast-color: var(--u-text-inverse); border-radius: var(--bs-border-radius); }
-.toast.text-bg-dark { background: var(--u-sidebar-bg) !important; color: var(--u-text-inverse) !important; }
+.toast { --bs-toast-bg: var(--u-sidebar-bg); --bs-toast-color: var(--u-sidebar-text); border-radius: var(--bs-border-radius); }
+.toast.text-bg-dark { background: var(--u-sidebar-bg) !important; color: var(--u-sidebar-text) !important; }
 
 /* ── Flat input group ────────────────────────────────────────────────── */
 .input-group-text { background: var(--u-surface); border-color: var(--u-border-strong); color: var(--u-text-muted); }
@@ -551,6 +568,48 @@ body.sidebar-hidden .main-wrapper { margin-left: 0; }
 .EasyMDEContainer .CodeMirror { background: var(--u-bg); color: var(--u-text); border-color: var(--u-border-strong); }
 .EasyMDEContainer .editor-preview { background: var(--u-bg); }
 
+/* EasyMDE ships a light-only palette (hardcoded #fff/#fcfcfc/#00f/near-black
+   cursor and selection). Unscoped, those leak through in dark mode as
+   invisible text, a washed-out hover state, and a black caret. Map them onto
+   the theme tokens and scope the fixes to dark so light mode is untouched. */
+[data-mode="dark"] .EasyMDEContainer .editor-toolbar button.active,
+[data-mode="dark"] .EasyMDEContainer .editor-toolbar button:hover {
+  background: var(--u-surface-hover); border-color: var(--u-border-strong);
+}
+[data-mode="dark"] .EasyMDEContainer .editor-toolbar.fullscreen { background: var(--u-bg); }
+[data-mode="dark"] .EasyMDEContainer .editor-toolbar.fullscreen::before { background: linear-gradient(to right, var(--u-bg) 0, transparent 100%); }
+[data-mode="dark"] .EasyMDEContainer .editor-toolbar.fullscreen::after  { background: linear-gradient(to left, var(--u-bg) 0, transparent 100%); }
+[data-mode="dark"] .EasyMDEContainer .editor-toolbar i.separator { border-left-color: var(--u-border-strong); border-right-color: transparent; }
+[data-mode="dark"] .EasyMDEContainer .editor-statusbar,
+[data-mode="dark"] .EasyMDEContainer .editor-statusbar span { color: var(--u-text-muted); }
+[data-mode="dark"] .EasyMDEContainer .editor-preview,
+[data-mode="dark"] .EasyMDEContainer .editor-preview-side { background: var(--u-bg); color: var(--u-text); }
+[data-mode="dark"] .EasyMDEContainer .CodeMirror-cursor { border-left-color: var(--u-text); background-color: transparent; }
+[data-mode="dark"] .EasyMDEContainer .CodeMirror-selected { background: color-mix(in srgb, var(--u-accent) 32%, transparent); }
+[data-mode="dark"] .EasyMDEContainer .CodeMirror-focused .CodeMirror-selected { background: color-mix(in srgb, var(--u-accent) 45%, transparent); }
+[data-mode="dark"] .EasyMDEContainer .CodeMirror-placeholder { color: var(--u-text-muted); }
+/* Markdown syntax hues: the defaults are tuned for white paper. */
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-header,
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-def,
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-attribute,
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-link { color: var(--u-info); }
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-keyword,
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-builtin { color: var(--u-accent); }
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-string,
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-string-2 { color: var(--u-warning); }
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-comment { color: var(--u-text-muted); }
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-quote,
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-tag { color: var(--u-success); }
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-meta,
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-qualifier,
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-atom,
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-number,
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-variable-2,
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-type,
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-variable-3,
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-bracket,
+[data-mode="dark"] .EasyMDEContainer .cm-s-default .cm-hr { color: var(--u-text); }
+
 /* ── Flat alert/link ─────────────────────────────────────────────────── */
 a { color: var(--u-accent); }
 a:hover { color: var(--u-accent-hover); }
@@ -566,9 +625,229 @@ hr { border-color: var(--u-border); opacity: 0.5; }
 
 /* ── Graph viz background ────────────────────────────────────────────── */
 #graph-viz { background: var(--u-surface); }
+
+/* ════════════════════════════════════════════════════════════════════════
+   APPLE-STYLE LAYER — motion, material, depth, type
+   Response on pointer-down · interruptible springs · velocity handoff ·
+   momentum projection · translucent materials · optical typography ·
+   graceful degradation for reduced motion / transparency / contrast.
+   ════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* Depth: few levels, each one earning its place */
+  --u-shadow-1: 0 1px 2px rgba(0,0,0,.06), 0 1px 1px rgba(0,0,0,.04);
+  --u-shadow-2: 0 4px 14px rgba(0,0,0,.10), 0 1px 3px rgba(0,0,0,.06);
+  --u-shadow-3: 0 18px 48px rgba(0,0,0,.20), 0 4px 14px rgba(0,0,0,.10);
+  /* Motion: springs drive everything a user can touch; easings are for chrome */
+  --u-ease: cubic-bezier(.32,.72,0,1);
+  --u-fast: 120ms;
+  --u-base: 240ms;
+  /* Foreground for text sitting ON a status tint. The tints stay the same
+     across modes but the correct ink flips: bright tints (info/warning/
+     success) need dark ink in BOTH modes, while danger/secondary are dark
+     enough in light mode to need white. Inheriting body text here was the
+     bug — in dark mode that produced dark-on-bright unreadable badges. */
+  --u-on-tint: #0f172a;
+  --u-on-danger: #ffffff;
+  --u-on-secondary: #ffffff;
+  /* Translucent material */
+  --u-blur: 22px;
+  --u-saturate: 180%;
+}
+[data-mode="dark"] {
+  --u-on-danger: #0f172a;
+  --u-on-secondary: #0f172a;
+}
+
+/* ── Typography: size-specific tracking, leading that tracks size ────── */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 1rem;
+  line-height: 1.5;
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+h1, .h1 { font-size: 1.9rem;  line-height: 1.08; letter-spacing: -.024em; font-weight: 700; }
+h2, .h2 { font-size: 1.5rem;  line-height: 1.14; letter-spacing: -.019em; font-weight: 700; }
+h3, .h3 { font-size: 1.25rem; line-height: 1.2;  letter-spacing: -.014em; font-weight: 600; }
+h4, .h4, h5, .h5 { letter-spacing: -.01em; font-weight: 600; }
+/* Small text reads better with a touch of positive tracking. */
+small, .small, .form-label { letter-spacing: .006em; }
+.stat-num { letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.id-mono, .doc-row-id, code, kbd, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; }
+
+/* ── Depth: material weight encodes hierarchy ────────────────────────── */
+.card { box-shadow: var(--u-shadow-1) !important; transition: box-shadow var(--u-base) var(--u-ease), border-color var(--u-base) var(--u-ease); }
+.card-header { border-bottom-color: color-mix(in srgb, var(--u-border) 70%, transparent); }
+.mem-card { box-shadow: var(--u-shadow-1) !important; transition: box-shadow var(--u-base) var(--u-ease), border-color var(--u-base) var(--u-ease), transform var(--u-base) var(--u-ease); }
+.mem-card:hover { box-shadow: var(--u-shadow-2) !important; }
+.mem-card:active { transform: scale(.995); }
+
+/* ── Response: feedback lands on pointer-down, never on release ──────── */
+.btn {
+  transition: transform var(--u-fast) var(--u-ease), background-color var(--u-fast) linear,
+              border-color var(--u-fast) linear, color var(--u-fast) linear, box-shadow var(--u-fast) linear;
+}
+.btn:active { transform: scale(.97); }
+.btn-primary, .btn-danger, .btn-warning, .btn-success { box-shadow: var(--u-shadow-1) !important; }
+.form-control, .form-select {
+  transition: border-color var(--u-fast) linear, box-shadow var(--u-fast) linear, background-color var(--u-fast) linear;
+}
+.form-control:focus, .form-select:focus {
+  border-color: var(--u-accent);
+  box-shadow: 0 0 0 1px var(--u-accent), 0 0 0 4px color-mix(in srgb, var(--u-accent) 22%, transparent) !important;
+}
+.form-check-input { transition: background-color var(--u-fast) linear, border-color var(--u-fast) linear; }
+.pagination .page-link, .nav-tabs .nav-link, .dropdown-item, .list-group-item-action {
+  transition: background-color var(--u-fast) linear, color var(--u-fast) linear, border-color var(--u-fast) linear;
+}
+.mode-toggle:active { transform: scale(.96); }
+.theme-swatch { transition: transform var(--u-base) var(--u-ease), border-color var(--u-fast) linear; }
+.theme-swatch:active { transform: scale(.92); }
+.theme-swatch.active { transform: scale(1.12); }
+:where(a, button, input, select, textarea, .nav-link, [tabindex]):focus-visible {
+  outline: 2px solid var(--u-accent);
+  outline-offset: 2px;
+}
+
+/* ── Sidebar: motion is owned by the spring engine (JS) ──────────────── */
+/* Springs must be interruptible, so no CSS transition on the transform.
+   The class rules stay as resting states and as a no-JS fallback. */
+.sidebar {
+  transition: none;
+  box-shadow: var(--u-shadow-3) !important;
+  will-change: transform;
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+}
+.main-wrapper { transition: none; }
+.sidebar .nav-link { transition: color var(--u-fast) linear, background-color var(--u-fast) linear, transform var(--u-fast) var(--u-ease); }
+.sidebar .nav-link:active { transform: scale(.98); }
+body.u-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }
+
+/* ── Translucent chrome: content scrolls underneath ──────────────────── */
+.topbar {
+  background: color-mix(in srgb, var(--u-bg) 74%, transparent);
+  -webkit-backdrop-filter: blur(var(--u-blur)) saturate(var(--u-saturate));
+  backdrop-filter: blur(var(--u-blur)) saturate(var(--u-saturate));
+  border-bottom: none;
+}
+.topbar .btn-sidebar, .topbar .navbar-brand, .topbar .mode-toggle { position: relative; z-index: 1; }
+/* Scroll edge effect instead of a hard divider — only where content meets chrome. */
+.topbar::after {
+  content: "";
+  position: absolute; left: 0; right: 0; top: 100%; height: 16px;
+  pointer-events: none;
+  opacity: 0;
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--u-text) 10%, transparent), transparent);
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+  -webkit-mask-image: linear-gradient(to bottom, #000, transparent);
+  mask-image: linear-gradient(to bottom, #000, transparent);
+  transition: opacity var(--u-base) var(--u-ease);
+}
+body.scrolled .topbar::after { opacity: 1; }
+.sidebar-backdrop { background: rgba(0,0,0,.42); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); }
+
+/* ── Menus, sheets and toasts: materialize rather than just fade ─────── */
+.dropdown-menu {
+  background: color-mix(in srgb, var(--u-bg) 88%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(var(--u-saturate));
+  backdrop-filter: blur(24px) saturate(var(--u-saturate));
+  box-shadow: var(--u-shadow-3) !important;
+}
+.dropdown-menu.show { animation: u-materialize 170ms var(--u-ease) both; }
+.modal-content {
+  background: color-mix(in srgb, var(--u-bg) 92%, transparent);
+  -webkit-backdrop-filter: blur(30px) saturate(var(--u-saturate));
+  backdrop-filter: blur(30px) saturate(var(--u-saturate));
+  box-shadow: var(--u-shadow-3) !important;
+}
+.modal.show .modal-content { animation: u-materialize 200ms var(--u-ease) both; }
+.modal-backdrop.show { opacity: .42; }
+.modal.fade .modal-dialog { transition: transform var(--u-base) var(--u-ease), opacity var(--u-base) var(--u-ease); }
+.toast { box-shadow: var(--u-shadow-3) !important; }
+/* Only opacity + scale are animated: `transform` is left untouched so
+   popper/Bootstrap positioning and Bootstrap's own dialog transform work. */
+@keyframes u-materialize {
+  from { opacity: 0; scale: .96; }
+  to   { opacity: 1; scale: 1; }
+}
+
+/* ── Accessibility: gentler equivalents, never missing feedback ──────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .btn:active, .mem-card:active, .sidebar .nav-link:active,
+  .theme-swatch:active, .theme-swatch.active, .theme-swatch:hover,
+  .mode-toggle:active { transform: none !important; }
+  .topbar::after { transition: none !important; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .topbar, .dropdown-menu, .modal-content, .toast {
+    background: var(--u-bg) !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+  .sidebar-backdrop { background: rgba(0,0,0,.62) !important; }
+  .topbar::after { display: none !important; }
+}
+@media (prefers-contrast: more) {
+  :root { --u-border: var(--u-text-muted); --u-border-strong: var(--u-text); }
+  .card, .mem-card, .dropdown-menu, .modal-content, .form-control, .form-select {
+    border: 1px solid var(--u-border-strong) !important;
+  }
+  .topbar { border-bottom: 1px solid var(--u-border-strong) !important; }
+  .text-muted, .form-label, .stat-label { color: var(--u-text) !important; }
+}
 </style>
+<script>
+/* Theme boot — runs in <head>, before the first paint.
+   The palette lives behind [data-theme]/[data-mode] on <html>. When those are
+   only set by the script at the end of <body>, the browser paints a frame with
+   no tokens defined (falling back to white) before the dark palette lands —
+   visible as a light flash on refresh. Set them here instead, and mirror the
+   result into color-scheme + theme-color so the pull-to-refresh region the
+   browser paints outside the page is dark too. */
+(function(){
+  var THEMES = ["indigo","slate","warm","mono","rose","emerald","sky","violet"];
+  var theme = "indigo", mode = "light";
+  try {
+    var t = localStorage.getItem("uteke_theme");
+    if(THEMES.indexOf(t) > -1) theme = t;
+    var m = localStorage.getItem("uteke_mode");
+    if(m === "dark" || m === "light") mode = m;
+    else if(window.matchMedia("(prefers-color-scheme: dark)").matches) mode = "dark";
+  } catch(_){}
+  var d = document.documentElement;
+  d.setAttribute("data-theme", theme);
+  d.setAttribute("data-mode", mode);
+  d.setAttribute("data-bs-theme", mode);
+  // Read the resolved canvas color so chrome matches the theme exactly
+  // (each theme has its own background, e.g. warm #1c1917, mono #0a0a0a).
+  window.__utekeSyncChrome = function(){
+    try {
+      var el = document.documentElement;
+      el.style.colorScheme = el.getAttribute("data-mode") === "dark" ? "dark" : "light";
+      var bg = getComputedStyle(el).getPropertyValue("--u-bg").trim();
+      var meta = document.getElementById("u-theme-color");
+      if(meta && bg) meta.setAttribute("content", bg);
+    } catch(_){}
+  };
+  window.__utekeSyncChrome();
+})();
+</script>
 </head>
 <body>
+<script>
+/* Restore the sidebar state before the sidebar markup is parsed, otherwise the
+   panel paints open and then snaps shut on every refresh. */
+try { if(localStorage.getItem("uteke_sidebar_hidden") === "1") document.body.classList.add("sidebar-hidden"); } catch(_){}
+</script>
 <!-- Sidebar -->
 <nav class="sidebar" id="sidebar">
   <div class="sidebar-header">Navigation</div>
@@ -1367,6 +1646,8 @@ function applyTheme(theme){
   if(!THEMES.includes(theme)) theme = "indigo";
   document.documentElement.setAttribute("data-theme", theme);
   try { localStorage.setItem("uteke_theme", theme); } catch(_){}
+  // --u-bg changes with the theme, so the browser chrome color must follow.
+  if(window.__utekeSyncChrome) window.__utekeSyncChrome();
   document.querySelectorAll(".theme-swatch").forEach(s => s.classList.toggle("active", s.dataset.swatch === theme));
 }
 function applyMode(mode){
@@ -1376,6 +1657,7 @@ function applyMode(mode){
   // switch to dark only when data-bs-theme="dark" is set on <html>.
   document.documentElement.setAttribute("data-bs-theme", mode);
   try { localStorage.setItem("uteke_mode", mode); } catch(_){}
+  if(window.__utekeSyncChrome) window.__utekeSyncChrome();
   const icon = document.getElementById("mode-icon");
   const label = document.getElementById("mode-label");
   if(icon) icon.className = mode === "dark" ? "bi bi-moon-stars" : "bi bi-sun";
@@ -1383,7 +1665,9 @@ function applyMode(mode){
 }
 function setTheme(theme){ applyTheme(theme); }
 function toggleMode(){ applyMode(getStoredMode() === "dark" ? "light" : "dark"); }
-// Apply stored theme/mode immediately (before any rendering)
+// The theme is already applied by the boot script in <head> (that is what
+// prevents the light flash on refresh). Re-apply here only to sync the
+// toggle's icon/label and the active swatch, which need the DOM to exist.
 applyTheme(getStoredTheme());
 applyMode(getStoredMode());
 
@@ -1393,6 +1677,14 @@ let detailMem = null, forgetId = null, editId = null;
 let bsModals = {};
 
 function getCSRF(){ return document.cookie.match(/csrf_token=([^;]+)/)?.[1] || ''; }
+// Reads a themed CSS custom property so canvas/vendor renderers (cytoscape)
+// follow the active theme instead of freezing a hardcoded color.
+function cssVar(name, fallback){
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  } catch(_){ return fallback; }
+}
 function $(id){ return document.getElementById(id); }
 function esc(s){ return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 function shortId(id){ return (id||"").slice(0,8); }
@@ -1960,17 +2252,161 @@ function showPage(name){
   document.getElementById("page-settings").style.display = name === "settings" ? "" : "none";
   document.querySelectorAll(".sidebar .nav-link").forEach(t => t.classList.toggle("active", t.dataset.page === name));
 }
-function toggleSidebar(){
-  document.body.classList.toggle("sidebar-hidden");
-  // Persist preference
-  try { localStorage.setItem("uteke_sidebar_hidden", document.body.classList.contains("sidebar-hidden") ? "1" : "0"); } catch(_){}
+// ── Apple-style motion engine ────────────────────────────────────────────
+// Springs are inherently interruptible and velocity-aware, so motion can be
+// grabbed and reversed mid-flight — CSS transitions and @keyframes cannot.
+// Everything below animates from the live (presentation) value, never the target.
+const U_REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+// damping 1.0 = critically damped (no overshoot). Use < 1 only when the
+// gesture itself carried momentum (a flick) — never on a plain fade-in.
+function createSpring({ damping = 1.0, response = 0.4, onUpdate, onRest }){
+  const omega = (2 * Math.PI) / Math.max(response, 0.05);
+  let x = 0, v = 0, running = false, lastT = 0, rafId = 0;
+  function frame(t){
+    if(!running) return;
+    const dt = Math.min(Math.max((t - lastT) / 1000, 0.001), 1/30);
+    lastT = t;
+    // Semi-implicit Euler on a damped spring: a = -ω²x - 2ζωv
+    const a = -omega * omega * x - 2 * damping * omega * v;
+    v += a * dt;
+    x += v * dt;
+    if(Math.abs(x) < 0.05 && Math.abs(v) < 0.5){
+      x = 0; v = 0; running = false;
+      onUpdate(0, 0);
+      if(onRest) onRest();
+      return;
+    }
+    onUpdate(x, v);
+    rafId = requestAnimationFrame(frame);
+  }
+  return {
+    // Start — or re-target — from the current value *and* current velocity.
+    to(nextX, nextV){
+      x = nextX; v = nextV || 0;
+      if(!running){ running = true; lastT = performance.now(); rafId = requestAnimationFrame(frame); }
+    },
+    stop(){ running = false; if(rafId) cancelAnimationFrame(rafId); },
+    get running(){ return running; }
+  };
 }
-// Restore sidebar state on load
-try { if(localStorage.getItem("uteke_sidebar_hidden") === "1") document.body.classList.add("sidebar-hidden"); } catch(_){}
+
+// Apple's momentum projection (exponential-decay form, not the textbook
+// v²/2d): where would this flick come to rest if it decelerated naturally?
+function projectMomentum(velocity, decelerationRate = 0.998){
+  return (velocity / 1000) * decelerationRate / (1 - decelerationRate);
+}
+// Progressive resistance at a boundary: real things slow before they stop.
+function rubberband(overshoot, dimension, constant = 0.55){
+  return (overshoot * dimension * constant) / (dimension + constant * Math.abs(overshoot));
+}
+
+// ── Sidebar: spring-driven, interruptible, draggable 1:1 ─────────────────
+(function initSidebarMotion(){
+  const panel = document.getElementById("sidebar");
+  const wrap = document.querySelector(".main-wrapper");
+  if(!panel || !wrap) return;
+  const width = () => (window.innerWidth <= 768 ? 200 : 240);
+  const isOpen = () => !document.body.classList.contains("sidebar-hidden");
+  let offset = null;   // live translateX while animating; null = at rest (CSS owns it)
+  let target = 0;      // spring rest position, in offset space
+  let samples = [];
+  let drag = null;
+
+  const spring = createSpring({
+    damping: 1.0, response: 0.4,
+    onUpdate: (x) => apply(target + x),
+    onRest: () => { spring.stop(); clearInline(); }
+  });
+
+  function readOffset(){
+    if(offset !== null) return offset;
+    const t = getComputedStyle(panel).transform;
+    if(!t || t === "none") return isOpen() ? 0 : -width();
+    try { return new DOMMatrixReadOnly(t).m41; } catch(_){ return isOpen() ? 0 : -width(); }
+  }
+  function apply(off){
+    offset = off;
+    panel.style.transform = "translateX(" + off + "px)";
+    wrap.style.marginLeft = Math.max(0, width() + off) + "px";
+  }
+  function clearInline(){ offset = null; panel.style.transform = ""; wrap.style.marginLeft = ""; }
+  function animateTo(open, velocity){
+    const from = readOffset();   // capture the live value BEFORE state changes
+    document.body.classList.toggle("sidebar-hidden", !open);
+    if(U_REDUCED_MOTION.matches){ spring.stop(); clearInline(); return; }
+    target = open ? 0 : -width();
+    spring.to(from - target, velocity || 0);
+  }
+  window.utekeSidebar = { animateTo, isOpen, readOffset };
+
+  function velocityOf(){
+    if(samples.length < 2) return 0;
+    const a = samples[0], b = samples[samples.length - 1];
+    const dt = (b.t - a.t) / 1000;
+    return dt > 0 ? (b.x - a.x) / dt : 0;
+  }
+  function collect(e){
+    samples.push({ t: performance.now(), x: e.clientX });
+    if(samples.length > 6) samples.shift();
+  }
+
+  // Drag from the panel itself, or pull in from the screen edge to open it.
+  document.addEventListener("pointerdown", (e) => {
+    if(e.pointerType === "mouse" && e.button !== 0) return;
+    if(!panel.contains(e.target) && e.clientX > 24) return;
+    drag = { id: e.pointerId, x0: e.clientX, y0: e.clientY, off0: readOffset(), w: width(), active: false };
+    samples = [{ t: performance.now(), x: e.clientX }];
+  }, { capture: true });
+
+  document.addEventListener("pointermove", (e) => {
+    if(!drag || e.pointerId !== drag.id) return;
+    const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
+    if(!drag.active){
+      if(Math.abs(dx) < 10 && Math.abs(dy) < 10) return;        // hysteresis
+      if(Math.abs(dy) > Math.abs(dx)){ drag = null; return; }   // that's a scroll
+      drag.active = true;
+      spring.stop();
+      document.body.classList.add("u-dragging");
+      try { panel.setPointerCapture(e.pointerId); } catch(_){}
+    }
+    collect(e);
+    // 1:1 tracking with soft boundaries instead of hard stops.
+    let off = drag.off0 + dx;
+    if(off > 0) off = rubberband(off, drag.w);
+    else if(off < -drag.w) off = -drag.w - rubberband(-drag.w - off, drag.w);
+    document.body.classList.remove("sidebar-hidden");
+    apply(off);
+  }, { passive: true });
+
+  function endDrag(e){
+    if(!drag || (e.pointerId !== undefined && e.pointerId !== drag.id)) return;
+    const d = drag; drag = null;
+    document.body.classList.remove("u-dragging");
+    if(!d.active) return;
+    const v = velocityOf();
+    const resting = d.off0 + projectMomentum(v);
+    // Reverse vs. commit is decided by velocity *sign*; position is the fallback.
+    const open = Math.abs(v) > 120 ? v > 0 : resting > -d.w / 2;
+    animateTo(open, v);   // hand the finger's velocity straight to the spring
+  }
+  document.addEventListener("pointerup", endDrag);
+  document.addEventListener("pointercancel", endDrag);
+})();
+
+function toggleSidebar(){
+  const opening = document.body.classList.contains("sidebar-hidden");
+  if(window.utekeSidebar) window.utekeSidebar.animateTo(opening);
+  else document.body.classList.toggle("sidebar-hidden");
+  try { localStorage.setItem("uteke_sidebar_hidden", opening ? "0" : "1"); } catch(_){}
+}
+// Sidebar state is restored earlier — right after <body>, before the sidebar
+// markup is parsed — so the panel never flashes open on a refresh.
 // Auto-hide sidebar on mobile after navigation
 function autoHideSidebarMobile(){
   if(window.innerWidth <= 768 && !document.body.classList.contains("sidebar-hidden")){
-    document.body.classList.add("sidebar-hidden");
+    if(window.utekeSidebar) window.utekeSidebar.animateTo(false);
+    else document.body.classList.add("sidebar-hidden");
   }
 }
 function routeHash(){
@@ -2805,7 +3241,9 @@ function graphRenderCytoscape(container, nodes, edges){
         "text-valign": "center",
         "text-halign": "center",
         "background-color": "#3b82f6",
-        "color": "#fff",
+        // Node fills are a fixed palette, and all of them are light enough
+        // that dark ink is the only readable choice — in either mode.
+        "color": cssVar("--u-on-tint", "#0f172a"),
         "font-size": "14px",
         "width": "label",
         "height": "label",
@@ -2816,15 +3254,16 @@ function graphRenderCytoscape(container, nodes, edges){
       }},
       { selector: "node[type='person']", style: { "background-color": "#10b981" } },
       { selector: "node[type='organization']", style: { "background-color": "#f59e0b" } },
-      { selector: "node[type='location']", style: { "background-color": "#8b5cf6" } },
+      { selector: "node[type='location']", style: { "background-color": "#a78bfa" } },
       { selector: "edge", style: {
         "label": "data(label)",
         "curve-style": "bezier",
         "target-arrow-shape": "triangle",
         "arrow-scale": 1.2,
-        "line-color": "#94a3b8",
-        "target-arrow-color": "#94a3b8",
-        "color": "#64748b",
+        "line-color": cssVar("--u-text-muted", "#94a3b8"),
+        "target-arrow-color": cssVar("--u-text-muted", "#94a3b8"),
+        // Theme-aware so the label stays legible when the surface flips.
+        "color": cssVar("--u-text-muted", "#64748b"),
         "font-size": "11px",
         "text-rotation": "autorotate",
         "width": 2,
@@ -3121,6 +3560,27 @@ async function nsRecomputeImportance(){
     toast(`Recomputed importance for ${r.updated ?? 0} memories`);
   } catch(e){ toast("Recompute failed: "+e.message); }
 }
+
+// ── Scroll edge effect ───────────────────────────────────────────────────
+// The fade under the topbar only appears once content actually scrolls under it.
+function updateScrollEdge(){ document.body.classList.toggle("scrolled", window.scrollY > 4); }
+window.addEventListener("scroll", updateScrollEdge, { passive: true });
+updateScrollEdge();
+
+// ── Anchored origins ─────────────────────────────────────────────────────
+// Menus materialize from the control that opened them, not from their center.
+document.addEventListener("show.bs.dropdown", (e) => {
+  const holder = e.target.parentElement;
+  const menu = holder && holder.querySelector(".dropdown-menu");
+  if(!menu) return;
+  const r = e.target.getBoundingClientRect();
+  requestAnimationFrame(() => {
+    const m = menu.getBoundingClientRect();
+    if(!m.width) return;
+    const x = Math.min(Math.max(r.left + r.width / 2 - m.left, 10), m.width - 10);
+    menu.style.transformOrigin = x + "px top";
+  });
+});
 
 routeHash();
 </script>
