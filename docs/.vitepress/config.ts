@@ -27,6 +27,7 @@ export default createConfig({
       text: 'Features',
       items: [
         { text: 'Rooms', link: '/rooms' },
+        { text: 'Task Board', link: '/task-board' },
         { text: 'Time-Travel', link: '/time-travel' },
         { text: 'Multi-Agent', link: '/multi-agent' },
         { text: 'Smart Decay', link: '/smart-decay' },
